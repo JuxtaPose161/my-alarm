@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">My Alarm English</string>
+    <string name="captcha_label">Английский из Anki</string>
+</resources>

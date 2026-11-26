@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Simple vector icon: an alarm-clock circle with the letters "En". -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#FF2B6CB0"
+        android:pathData="M24,4a20,20 0,1 1,0 40a20,20 0,1 1,0 -40z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M13,16h9v3h-6v3h5v3h-5v3h6v3h-9z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M24,21h3v1.2c0.8,-0.9 1.9,-1.4 3.2,-1.4c2.4,0 3.8,1.6 3.8,4.2v6h-3v-5.6c0,-1.2 -0.6,-1.9 -1.7,-1.9c-1.2,0 -2.3,0.8 -2.3,2.3v5.2h-3z" />
+</vector>
