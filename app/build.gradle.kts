@@ -9,7 +9,10 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "io.github.juxtapose161.myalarm"
+        // Sleep as Android has no <queries> entry for the captcha OPEN action, so on Android 11+
+        // it only sees captcha apps whose package is on its explicit allowlist.
+        // "com.urbandroid.mycaptcha" is on that list and reserved for custom captchas.
+        applicationId = "com.urbandroid.mycaptcha"
         minSdk = 26
         targetSdk = 35
         versionCode = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1)
