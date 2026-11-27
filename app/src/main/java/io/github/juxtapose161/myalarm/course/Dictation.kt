@@ -3,14 +3,15 @@ package io.github.juxtapose161.myalarm.course
 import io.github.juxtapose161.myalarm.quiz.TextUtil
 
 /** Parses a dictation text with [[gaps]] and checks the answers locally. */
-class Dictation(spec: DictationSpec) {
+class Dictation(val title: String, text: String) {
+
+    constructor(task: TaskFile) : this(task.title, task.dictation)
 
     sealed class Part {
         data class Text(val text: String) : Part()
         data class Gap(val index: Int, val answer: String) : Part()
     }
 
-    val title = spec.title
     val parts: List<Part>
     val gaps: List<Part.Gap>
 
@@ -21,15 +22,15 @@ class Dictation(spec: DictationSpec) {
         val list = mutableListOf<Part>()
         var last = 0
         var n = 0
-        for (m in GAP.findAll(spec.text)) {
-            if (m.range.first > last) list += Part.Text(spec.text.substring(last, m.range.first))
+        for (m in GAP.findAll(text)) {
+            if (m.range.first > last) list += Part.Text(text.substring(last, m.range.first))
             list += Part.Gap(n++, m.groupValues[1].trim())
             last = m.range.last + 1
         }
-        if (last < spec.text.length) list += Part.Text(spec.text.substring(last))
+        if (last < text.length) list += Part.Text(text.substring(last))
         parts = list
         gaps = list.filterIsInstance<Part.Gap>()
-        spoken = GAP.replace(spec.text) { it.groupValues[1] }
+        spoken = GAP.replace(text) { it.groupValues[1] }
     }
 
     /** How many gaps may be wrong and the dictation still counts. */

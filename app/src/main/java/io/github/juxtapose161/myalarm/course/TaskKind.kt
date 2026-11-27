@@ -2,43 +2,51 @@ package io.github.juxtapose161.myalarm.course
 
 import kotlinx.serialization.Serializable
 
-/** How a kind of task is run. */
+/** How a kind of task is run on the phone. */
 enum class Engine {
-    /** The old quick cards (choice / audio / cloze / typing / math). Offline. */
+    /** The old quick cards (choice / audio / cloze / typing / math). */
     QUICK,
-    /** Translate N words, checked locally. Offline. */
+    /** Translate N words from Anki. */
     TRANSLATE,
-    /** A written / dictated answer to a generated task, checked by Claude. */
-    WRITTEN,
-    /** A conversation with Claude playing a role. */
-    CHAT,
-    /** Explain a word, Claude guesses it. */
-    ALIAS,
-    /** Listen and fill the gaps, checked locally. */
+    /** A task prepared by Claude, answered in text fields and checked on the phone by its criteria. */
+    PREPARED,
+    /** Listen and fill the gaps (prepared by Claude). */
     DICTATION,
 }
 
-enum class TaskKind(val title: String, val description: String, val engine: Engine) {
+/** How the answer of a prepared task is entered. */
+enum class AnswerMode {
+    /** One text for the whole task. */
+    SINGLE,
+    /** One text per item (rephrasings). */
+    PER_ITEM,
+    /** A main text plus one text per item (retell + questions). */
+    MAIN_AND_ITEMS,
+    /** Items are the partner's lines, answered one after another like a chat. */
+    DIALOG,
+}
+
+enum class TaskKind(
+    val title: String,
+    val description: String,
+    val engine: Engine,
+    val mode: AnswerMode = AnswerMode.SINGLE,
+) {
     QUICK("Быстрые карточки", "Выбор перевода, аудио, пропуск, набор слова, примеры", Engine.QUICK),
     TRANSLATE("Перевод слов", "N слов, RU→EN и EN→RU по очереди. Ошибка — карточка пропускается", Engine.TRANSLATE),
-    DIALOG("Диалог", "Ситуация и первая фраза, нужно продолжить разговор, используя слова из Anki и грамматику", Engine.CHAT),
-    NEGOTIATION("Переговоры с целью", "Упрямый собеседник, нужно добиться своего", Engine.CHAT),
-    RETELL("Пересказ", "Прочитать или прослушать текст, пересказать и ответить на вопросы", Engine.WRITTEN),
-    ALIAS("Объясни слово", "Объяснить слово из Anki, не называя его. Claude угадывает", Engine.ALIAS),
-    REPHRASE("Скажи иначе", "Переформулировать фразу заданными конструкциями", Engine.WRITTEN),
-    ERRORS("Найди ошибки", "Текст с ошибками под твои слабые места — исправить", Engine.WRITTEN),
-    BACK_TRANSLATE("Обратный перевод", "Абзац на русском → по-английски, со словами и грамматикой урока", Engine.WRITTEN),
-    CUE_CARD("Монолог по карточке", "Тема и план как в IELTS Speaking Part 2: подготовка и монолог", Engine.WRITTEN),
-    DAY_PLAN("План дня", "Рассказать, что предстоит сегодня, будущими временами", Engine.WRITTEN),
-    YESTERDAY("Вчерашний день", "Рассказ о вчерашнем дне с прошедшими временами", Engine.WRITTEN),
+    DIALOG("Диалог", "Ситуация и реплики собеседника (дорога, рецепт, собеседование…) — отвечать по очереди, используя слова из Anki и грамматику", Engine.PREPARED, AnswerMode.DIALOG),
+    RETELL("Пересказ", "Прочитать или прослушать текст, пересказать и ответить на вопросы", Engine.PREPARED, AnswerMode.MAIN_AND_ITEMS),
+    REPHRASE("Скажи иначе", "Переформулировать фразу заданными конструкциями", Engine.PREPARED, AnswerMode.PER_ITEM),
+    ERRORS("Найди ошибки", "Текст с ошибками под твои слабые места — исправить", Engine.PREPARED),
+    BACK_TRANSLATE("Обратный перевод", "Абзац на русском → по-английски, со словами и грамматикой урока", Engine.PREPARED),
+    CUE_CARD("Монолог по карточке", "Тема и план как в IELTS Speaking Part 2: подготовка и монолог", Engine.PREPARED),
+    DAY_PLAN("План дня", "Рассказать, что предстоит сегодня, будущими временами", Engine.PREPARED),
+    YESTERDAY("Вчерашний день", "Рассказ о вчерашнем дне с прошедшими временами", Engine.PREPARED),
     DICTATION("Диктант с пропусками", "Телефон читает текст, нужно вписать пропущенные слова", Engine.DICTATION),
     ;
 
-    /** Needs Claude (a key and, at the moment of the task or before it, the network). */
-    val needsClaude get() = engine !in setOf(Engine.QUICK, Engine.TRANSLATE)
-
-    /** Can be prepared in advance (evening before), so the morning only needs the check. */
-    val pregenerated get() = engine in setOf(Engine.WRITTEN, Engine.CHAT, Engine.DICTATION)
+    /** Prepared by Claude in advance (needs a synced task). */
+    val prepared get() = engine == Engine.PREPARED || engine == Engine.DICTATION
 
     companion object {
         fun byName(name: String): TaskKind? = entries.firstOrNull { it.name == name }
@@ -50,11 +58,11 @@ enum class TaskKind(val title: String, val description: String, val engine: Engi
 data class TaskParams(
     val translateWords: Int = 5,
     val dialogMinutes: Int = 5,
+    val dialogTurns: Int = 5,
     val dialogWords: Int = 4,
     val dialogGrammar: Int = 2,
     val retellQuestions: Int = 3,
     val retellWords: Int = 3,
-    val aliasWords: Int = 3,
     val rephraseCount: Int = 3,
     val errorsCount: Int = 5,
     val backTranslateWords: Int = 3,

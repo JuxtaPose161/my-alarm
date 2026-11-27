@@ -34,15 +34,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import io.github.juxtapose161.myalarm.SettingsStore
-import io.github.juxtapose161.myalarm.course.ClaudeSettings
 import io.github.juxtapose161.myalarm.course.CourseStore
 import io.github.juxtapose161.myalarm.course.Curriculum
 import io.github.juxtapose161.myalarm.course.LearnerProfile
-import io.github.juxtapose161.myalarm.course.Preparer
 import io.github.juxtapose161.myalarm.course.Scenario
 import io.github.juxtapose161.myalarm.course.TaskKind
 import io.github.juxtapose161.myalarm.course.TaskParams
-import io.github.juxtapose161.myalarm.llm.ClaudeClient
+import io.github.juxtapose161.myalarm.course.ReviewFile
+import io.github.juxtapose161.myalarm.course.SyncSettings
+import io.github.juxtapose161.myalarm.data.Sync
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -71,94 +71,76 @@ private fun Stepper(label: String, value: Int, range: IntRange, step: Int = 1, f
 // ---------------------------------------------------------------------------------------------
 
 @Composable
-fun ClaudeTab(course: CourseStore) {
+fun SyncTab(course: CourseStore) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var claude by remember { mutableStateOf(course.claude) }
-    var profile by remember { mutableStateOf(course.profile) }
+    var sync by remember { mutableStateOf(course.sync) }
+    var level by remember { mutableStateOf(course.level) }
     var status by remember { mutableStateOf<String?>(null) }
-    var preparing by remember { mutableStateOf(false) }
-    var counts by remember { mutableStateOf(course.preparedCount()) }
-    fun update(c: ClaudeSettings) { claude = c; course.claude = c }
+    var busy by remember { mutableStateOf(false) }
+    var stock by remember { mutableStateOf(course.stock()) }
+    fun update(v: SyncSettings) { sync = v; course.sync = v.copy(lastSync = course.sync.lastSync, publishedHash = 0) }
 
     TabColumn {
         Text("Claude", style = MaterialTheme.typography.headlineSmall)
         Note(
-            "Claude готовит задания по курсу, проверяет ответы и ведёт профиль: что уже получается и что подтянуть. " +
-                "Нужен свой ключ API Anthropic (console.anthropic.com → API Keys). Ключ хранится только на телефоне. " +
-                "Без ключа работают перевод слов и быстрые карточки."
+            "Claude работает от твоей подписки в сессии Claude Code по расписанию. Ночью и днём она готовит задания " +
+                "по курсу и разбирает твои ответы. Телефон и сессия обмениваются файлами через твой приватный " +
+                "репозиторий на GitHub. Утром ответ проверяет телефон по критериям из задания, подробный разбор приходит позже."
         )
         OutlinedTextField(
-            value = claude.apiKey,
-            onValueChange = { update(claude.copy(apiKey = it.trim())) },
-            label = { Text("Ключ API (sk-ant-…)") },
+            value = sync.repo,
+            onValueChange = { update(sync.copy(repo = it.trim())) },
+            label = { Text("Репозиторий данных (владелец/имя)") },
+            placeholder = { Text("JuxtaPose161/my-alarm-data") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = sync.token,
+            onValueChange = { update(sync.copy(token = it.trim())) },
+            label = { Text("Токен GitHub (github_pat_…)") },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
             modifier = Modifier.fillMaxWidth(),
         )
-        OutlinedTextField(
-            value = claude.model,
-            onValueChange = { update(claude.copy(model = it.trim())) },
-            label = { Text("Модель") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+        Note(
+            "Токен: GitHub → Settings → Developer settings → Fine-grained tokens → доступ только к этому репозиторию, " +
+                "права Contents: Read and write. Хранится только на телефоне."
         )
-        Note("По умолчанию ${ClaudeSettings.DEFAULT_MODEL}. Можно указать другую модель Claude, например подешевле.")
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Проверять синонимы")
-                Note("Если перевод не совпал с карточкой, Claude решает, подходит ли он")
-            }
-            Switch(checked = claude.checkSynonyms, onCheckedChange = { update(claude.copy(checkSynonyms = it)) })
-        }
         Button(onClick = {
-            status = "Проверяю…"
+            busy = true; status = "Синхронизирую…"
             scope.launch {
-                status = runCatching { ClaudeClient(claude).ping() }
-                    .fold({ "✓ Claude отвечает" }, { "✗ ${it.message?.take(200)}" })
+                status = runCatching { Sync.run(context) }.fold(
+                    { r -> "✓ Отправлено ответов: ${r.uploaded}, новых заданий: ${r.downloaded}, разборов: ${r.reviews}" },
+                    { e -> "✗ ${e.message?.take(200)}" },
+                )
+                stock = course.stock()
+                busy = false
             }
-        }, enabled = claude.enabled, modifier = Modifier.fillMaxWidth()) { Text("Проверить связь") }
+        }, enabled = sync.enabled && !busy, modifier = Modifier.fillMaxWidth()) { Text("Синхронизировать сейчас") }
         status?.let { Text(it) }
+        val last = course.sync
+        if (last.lastSync > 0) Note("Последняя синхронизация: ${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(last.lastSync))}")
+        if (last.lastError.isNotBlank()) Text("Ошибка: ${last.lastError}", color = Warn)
 
         HorizontalDivider()
         Section("Уровень")
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Curriculum.cefrLevels.forEach { l ->
-                if (profile.level == l) Button(onClick = {}) { Text(l) }
-                else OutlinedButton(onClick = {
-                    course.updateProfile { it.copy(level = l) }
-                    profile = course.profile
-                    counts = course.preparedCount()
-                }) { Text(l) }
+                if (level == l) Button(onClick = {}) { Text(l) }
+                else OutlinedButton(onClick = { course.level = l; level = l; Sync.soon(context) }) { Text(l) }
             }
         }
-        val level = Curriculum.level(profile.level)
-        Note("Курс: ${level.book}. Темы: ${level.topics.joinToString(", ")}.")
+        val lvl = Curriculum.level(level)
+        Note("Курс: ${lvl.book}. Темы: ${lvl.topics.joinToString(", ")}. Новый уровень Claude учтёт при следующей подготовке заданий.")
 
         HorizontalDivider()
-        Section("Заготовки заданий")
-        Note(
-            "Задания готовятся заранее, когда есть интернет (раз в несколько часов), чтобы утром оставалась только проверка. " +
-                "Если заготовки нет, задание создаётся на месте, а без сети — заменяется переводом слов."
-        )
-        val wanted = Preparer.wantedKinds(course)
-        wanted.forEach { k -> Text("${k.title}: ${counts[k] ?: 0} из ${Preparer.STOCK}") }
-        Button(onClick = {
-            preparing = true
-            scope.launch {
-                val made = withContext(Dispatchers.IO) {
-                    Preparer.fill(context) { msg -> scope.launch { status = msg } }
-                }
-                status = "Готово, новых заданий: $made"
-                counts = course.preparedCount()
-                preparing = false
-            }
-        }, enabled = claude.enabled && !preparing, modifier = Modifier.fillMaxWidth()) {
-            Text(if (preparing) "Готовлю…" else "Подготовить сейчас")
-        }
-        OutlinedButton(onClick = { course.clearPrepared(); counts = course.preparedCount() }, modifier = Modifier.fillMaxWidth()) {
-            Text("Удалить заготовки")
-        }
+        Section("Готовые задания на телефоне")
+        val wanted = course.scenarios.flatMap { it.kindList }.filter { it.prepared }.distinct()
+        if (wanted.isEmpty()) Note("В сценариях нет заданий от Claude.")
+        wanted.forEach { k -> Text("${k.title}: ${stock[k] ?: 0}") }
+        Note("Если задания нет, вместо него будет перевод слов (или карточки), так что будильник выключится и без сети.")
     }
 }
 
@@ -197,7 +179,7 @@ fun ScenariosTab(course: CourseStore, onTest: (String) -> Unit) {
                             Checkbox(checked = k.name in s.kinds, onCheckedChange = { on ->
                                 edit(i) { sc -> sc.copy(kinds = if (on) sc.kinds + k.name else sc.kinds - k.name) }
                             })
-                            Text(k.title + if (k.needsClaude) "" else " (без сети)")
+                            Text(k.title + if (k.prepared) "" else " (без Claude)")
                         }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -241,19 +223,18 @@ fun TasksTab(course: CourseStore, onTest: (TaskKind) -> Unit) {
 
     TabColumn {
         Text("Задания", style = MaterialTheme.typography.headlineSmall)
-        Note("Отвечать можно текстом или голосом — микрофоном на клавиатуре. Пробный запуск не сохраняет результат в профиль.")
+        Note("Отвечать можно текстом или голосом — микрофоном на клавиатуре. Ответы пробного запуска тоже уходят Claude на разбор.")
         Kind(TaskKind.TRANSLATE) { Stepper("Слов (N)", p.translateWords, 1..20) { upd(p.copy(translateWords = it)) } }
         Kind(TaskKind.DIALOG) {
-            Stepper("Длительность, мин", p.dialogMinutes, 1..15) { upd(p.copy(dialogMinutes = it)) }
+            Stepper("Не короче, мин", p.dialogMinutes, 0..15) { upd(p.copy(dialogMinutes = it)) }
+            Stepper("Реплик собеседника", p.dialogTurns, 3..10) { upd(p.copy(dialogTurns = it)) }
             Stepper("Слов из Anki (N)", p.dialogWords, 0..8) { upd(p.copy(dialogWords = it)) }
             Stepper("Конструкций (M)", p.dialogGrammar, 0..4) { upd(p.copy(dialogGrammar = it)) }
         }
-        Kind(TaskKind.NEGOTIATION)
         Kind(TaskKind.RETELL) {
             Stepper("Вопросов (N)", p.retellQuestions, 1..6) { upd(p.copy(retellQuestions = it)) }
             Stepper("Слов из Anki (M)", p.retellWords, 0..8) { upd(p.copy(retellWords = it)) }
         }
-        Kind(TaskKind.ALIAS) { Stepper("Слов угадать", p.aliasWords, 1..8) { upd(p.copy(aliasWords = it)) } }
         Kind(TaskKind.REPHRASE) { Stepper("Вариантов", p.rephraseCount, 1..5) { upd(p.copy(rephraseCount = it)) } }
         Kind(TaskKind.ERRORS) { Stepper("Ошибок в тексте", p.errorsCount, 2..10) { upd(p.copy(errorsCount = it)) } }
         Kind(TaskKind.BACK_TRANSLATE) {
@@ -265,7 +246,7 @@ fun TasksTab(course: CourseStore, onTest: (TaskKind) -> Unit) {
         Kind(TaskKind.YESTERDAY) { Note("Число конструкций — то же, что в «Плане дня»: ${p.storyGrammar}") }
         Kind(TaskKind.DICTATION) { Stepper("Пропусков", p.dictationGaps, 3..15) { upd(p.copy(dictationGaps = it)) } }
         Kind(TaskKind.QUICK) { Note("Число карточек задаёт сложность в Sleep (1–5).") }
-        Note("Изменения размеров касаются новых заготовок. Чтобы применить сразу — «Удалить заготовки» на вкладке Claude.")
+        Note("Размеры заданий уходят Claude при синхронизации и касаются новых заданий.")
     }
 }
 
@@ -273,22 +254,30 @@ fun TasksTab(course: CourseStore, onTest: (TaskKind) -> Unit) {
 
 @Composable
 fun ProgressTab(course: CourseStore, store: SettingsStore) {
-    var profile by remember { mutableStateOf(course.profile) }
-    var confirmReset by remember { mutableStateOf(false) }
+    val profile = remember { course.profile }
+    val reviews = remember { course.reviews() }
+    val level = course.level
 
     TabColumn {
         Text("Прогресс", style = MaterialTheme.typography.headlineSmall)
-        Text("Уровень ${profile.level} · ${Curriculum.level(profile.level).book}")
+        Text("Уровень $level · ${Curriculum.level(level).book}")
         if (profile.summary.isNotBlank()) Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(14.dp)) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Заметки Claude", fontWeight = FontWeight.SemiBold)
                 Text(profile.summary)
+                if (profile.nextFocus.isNotEmpty()) Text("Дальше: ${profile.nextFocus.joinToString("; ")}", color = Color.Gray)
+                if (profile.updatedAt.isNotBlank()) Note("Обновлено ${profile.updatedAt}")
             }
-        } else Note("Заметки появятся после первых заданий, проверенных Claude.")
+        } else Note("Заметки появятся после первого разбора от Claude.")
+
+        if (reviews.isNotEmpty()) {
+            Section("Разборы Claude")
+            reviews.take(10).forEach { r -> ReviewCard(r) }
+        }
 
         Section("Грамматика уровня")
-        Curriculum.level(profile.level).grammar.forEach { g -> GrammarRow(profile, g) }
-        val below = Curriculum.grammarUpTo(profile.level).filter { it !in Curriculum.level(profile.level).grammar }
+        Curriculum.level(level).grammar.forEach { g -> GrammarRow(profile, g) }
+        val below = Curriculum.grammarUpTo(level).filter { it !in Curriculum.level(level).grammar }
             .filter { (profile.grammar[it.id]?.errors ?: 0) > 0 }
         if (below.isNotEmpty()) {
             Section("Повторить с прошлых уровней")
@@ -307,8 +296,8 @@ fun ProgressTab(course: CourseStore, store: SettingsStore) {
             Section("Трудные слова")
             Text(hard.joinToString(" · "))
         }
-        Section("Последние задания")
-        val history = profile.history.takeLast(20).reversed()
+        Section("Последние задания на телефоне")
+        val history = course.history.takeLast(20).reversed()
         if (history.isEmpty()) Note("Пока пусто")
         history.forEach { h ->
             val kind = TaskKind.byName(h.kind)?.title ?: if (h.kind == "ESCAPE") "Запасной выход" else h.kind
@@ -316,22 +305,31 @@ fun ProgressTab(course: CourseStore, store: SettingsStore) {
         }
         val old = remember { store.history().takeLast(7).reversed() }
         if (old.isNotEmpty()) {
-            Section("Быстрые карточки по дням")
+            Section("Слова по дням")
             old.forEach { line ->
                 val p = line.split('|')
                 if (p.size == 3) Text("${p[0]}: верно ${p[1]}, ошибок ${p[2]}")
             }
         }
-        HorizontalDivider()
-        OutlinedButton(onClick = {
-            if (confirmReset) {
-                val level = profile.level
-                course.profile = LearnerProfile(level = level)
-                profile = course.profile
-                confirmReset = false
-            } else confirmReset = true
-        }, modifier = Modifier.fillMaxWidth()) {
-            Text(if (confirmReset) "Точно сбросить? Нажми ещё раз" else "Сбросить профиль")
+    }
+}
+
+@Composable
+private fun ReviewCard(r: ReviewFile) {
+    var open by remember { mutableStateOf(false) }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            val kind = TaskKind.byName(r.kind)?.title ?: r.kind
+            Text("${if (r.passed) "✓" else "✗"} $kind${if (r.title.isNotBlank()) " «${r.title}»" else ""}", fontWeight = FontWeight.SemiBold)
+            if (r.feedbackRu.isNotBlank()) Text(r.feedbackRu)
+            if (open) {
+                r.criteria.forEach { c -> Text("${if (c.ok) "✓" else "✗"} ${c.name}${if (c.comment.isNotBlank()) " — ${c.comment}" else ""}") }
+                r.corrections.forEach { c -> Text("• ${c.wrong} → ${c.right}${if (c.why.isNotBlank()) " (${c.why})" else ""}", color = Warn) }
+                if (r.modelAnswer.isNotBlank()) Text("Как можно было: ${r.modelAnswer}", color = Color.Gray)
+            }
+            if (r.corrections.isNotEmpty() || r.criteria.isNotEmpty() || r.modelAnswer.isNotBlank()) {
+                OutlinedButton(onClick = { open = !open }) { Text(if (open) "Свернуть" else "Подробнее (${r.corrections.size} исправл.)") }
+            }
         }
     }
 }

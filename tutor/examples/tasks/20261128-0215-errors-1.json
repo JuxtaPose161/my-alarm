@@ -1,0 +1,17 @@
+{
+  "id": "20261128-0215-errors-1",
+  "kind": "ERRORS",
+  "level": "B1",
+  "createdAt": "2026-11-28T02:15:00+03:00",
+  "title": "An email to a colleague",
+  "instructionsRu": "В письме есть ошибки. Выпиши каждый неправильный фрагмент и исправление в виде «неправильно → правильно».",
+  "material": "Hi Anna! I am writing you because I need a help with the report. Yesterday I have finished the first part, but the second part is more difficult. My boss want it on Friday. Could you look at the numbers, please? I think I made the mistake in the second table. We can meet in Monday morning if it suits you. Thanks a lot!",
+  "errors": [
+    {"wrong": "i am writing you", "right": ["writing to you"], "whyRu": "write to somebody"},
+    {"wrong": "a help", "right": ["need help", "need some help"], "whyRu": "help — неисчисляемое"},
+    {"wrong": "yesterday i have finished", "right": ["yesterday i finished", "i finished the first"], "whyRu": "yesterday → Past Simple"},
+    {"wrong": "my boss want", "right": ["boss wants"], "whyRu": "3-е лицо: -s"},
+    {"wrong": "in monday", "right": ["on monday"], "whyRu": "on + день недели"}
+  ],
+  "needErrors": 4
+}

@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -20,7 +19,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -34,7 +32,6 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,30 +46,16 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import io.github.juxtapose161.myalarm.course.Curriculum
+import io.github.juxtapose161.myalarm.course.AnswerFile
+import io.github.juxtapose161.myalarm.course.AnswerMode
+import io.github.juxtapose161.myalarm.course.Criterion
 import io.github.juxtapose161.myalarm.course.Dictation
-import io.github.juxtapose161.myalarm.course.Evaluation
-import io.github.juxtapose161.myalarm.course.TaskKind
-import io.github.juxtapose161.myalarm.quiz.TextUtil
+import io.github.juxtapose161.myalarm.course.LocalCheck
 import io.github.juxtapose161.myalarm.quiz.TranslateSession
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 private val Muted = Color.Gray
 private val CardBg = Color(0xFF1B2229)
-
-private fun wordCount(s: String) = s.split(Regex("""\s+""")).count { it.any(Char::isLetter) }
-
-private fun grammarNames(ids: List<String>) = ids.mapNotNull { Curriculum.grammar(it) }.map { it.ru }
-
-private fun errorText(e: Throwable): String {
-    val m = e.message.orEmpty()
-    return when {
-        "401" in m || "authentication" in m.lowercase() -> "Claude не принял ключ API — проверь его в настройках"
-        "UnknownHost" in e.javaClass.simpleName || "Unable to resolve host" in m -> "Нет интернета"
-        else -> "Ошибка Claude: ${m.take(140)}"
-    }
-}
 
 @Composable
 private fun Hint(text: String) = Text(text, color = Muted)
@@ -84,7 +67,7 @@ private fun Panel(content: @Composable () -> Unit) {
     }
 }
 
-/** A large multi-line field for typed or voice-typed answers (keyboard microphone). */
+/** A multi-line field for typed or voice-typed answers (keyboard microphone). */
 @Composable
 private fun AnswerField(value: String, onChange: (String) -> Unit, enabled: Boolean, label: String, minLines: Int = 5) {
     OutlinedTextField(
@@ -104,13 +87,11 @@ private fun AnswerField(value: String, onChange: (String) -> Unit, enabled: Bool
 
 @Composable
 fun TranslateStep(session: TranslateSession, host: TaskHost) {
-    val scope = rememberCoroutineScope()
     var card by remember { mutableStateOf(session.current) }
     var input by remember { mutableStateOf("") }
     var verdict by remember { mutableStateOf<Boolean?>(null) }
-    var comment by remember { mutableStateOf<String?>(null) }
-    var checking by remember { mutableStateOf(false) }
     var done by remember { mutableIntStateOf(session.done) }
+    val disputed = remember { mutableStateListOf<String>() }
     val focus = remember { FocusRequester() }
 
     LaunchedEffect(card) { runCatching { focus.requestFocus() } }
@@ -120,26 +101,25 @@ fun TranslateStep(session: TranslateSession, host: TaskHost) {
         session.answer(v)
         done = session.done
         if (session.isFinished) {
-            host.complete(StepResult(true, missedNotes = session.missed.toSet(), correctNotes = session.correct.toSet()))
+            host.complete(StepResult(
+                true,
+                missedNotes = session.missed.toSet(),
+                correctNotes = session.correct.toSet(),
+                answer = AnswerFile(taskId = "", kind = "", answeredAt = "", passed = true, disputed = disputed.toList()),
+            ))
             return@LaunchedEffect
         }
         card = session.current
-        input = ""; verdict = null; comment = null
+        input = ""; verdict = null
     }
 
     val c = card ?: return
     fun check() {
-        if (verdict != null || checking || input.isBlank()) return
-        if (session.checkLocally(input)) { verdict = true; return }
-        val tutor = host.tutor
-        if (!host.checkSynonyms || tutor == null) { verdict = false; return }
-        checking = true
-        scope.launch {
-            val r = runCatching { host.busy { tutor.synonym(c.toEnglish, c.prompt, c.shownAnswer, input) } }.getOrNull()
-            checking = false
-            comment = r?.comment?.takeIf { it.isNotBlank() }
-            verdict = r?.acceptable ?: false
-        }
+        if (verdict != null || input.isBlank()) return
+        val ok = session.checkLocally(input)
+        // Answers that are not on the card go to Claude: maybe it is a fine synonym.
+        if (!ok) disputed += "${c.prompt} → «${input.trim()}» (на карточке: ${c.shownAnswer})"
+        verdict = ok
     }
 
     Text("✓ $done / ${session.required}", color = Muted)
@@ -151,352 +131,160 @@ fun TranslateStep(session: TranslateSession, host: TaskHost) {
         value = input,
         onValueChange = { input = it; host.alive() },
         singleLine = true,
-        enabled = verdict == null && !checking,
+        enabled = verdict == null,
         label = { Text("Напиши или продиктуй (микрофон на клавиатуре)") },
         textStyle = MaterialTheme.typography.headlineSmall,
         keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, imeAction = ImeAction.Done),
         keyboardActions = KeyboardActions(onDone = { check() }),
         modifier = Modifier.fillMaxWidth().focusRequester(focus),
     )
-    Button(onClick = ::check, enabled = verdict == null && !checking, modifier = Modifier.fillMaxWidth().height(56.dp)) {
-        Text(if (checking) "Проверяю синоним…" else "Проверить", fontSize = 18.sp)
+    Button(onClick = ::check, enabled = verdict == null, modifier = Modifier.fillMaxWidth().height(56.dp)) {
+        Text("Проверить", fontSize = 18.sp)
     }
     when (verdict) {
-        true -> Text("Верно! ${if (comment != null) "($comment)" else ""}", color = Good, fontSize = 18.sp)
+        true -> Text("Верно!", color = Good, fontSize = 18.sp)
         false -> {
             Text("Не засчитано, карточка пропущена", color = Bad, fontSize = 18.sp)
             Text("${c.word.en} — ${c.word.ru}", color = Warn, fontSize = 18.sp)
-            comment?.let { Hint(it) }
+            Hint("Если твой вариант тоже верный, Claude учтёт это при разборе.")
         }
         null -> Hint("Можно написать один из переводов. Ошибка — карточка пропускается и вернётся позже.")
     }
 }
 
 // ---------------------------------------------------------------------------------------------
-// Written tasks checked by Claude
+// Tasks prepared by Claude
 // ---------------------------------------------------------------------------------------------
 
 @Composable
-fun WrittenStep(step: Step.Written, host: TaskHost) {
-    val spec = step.spec
-    val scope = rememberCoroutineScope()
-    var prepLeft by remember { mutableIntStateOf(spec.prepSeconds) }
+fun CriteriaView(criteria: List<Criterion>, passed: Boolean) {
+    Panel {
+        Text(if (passed) "Засчитано ✓" else "Пока не засчитано", color = if (passed) Good else Bad,
+            fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
+        criteria.forEach { c ->
+            Text("${if (c.ok) "✓" else "✗"} ${c.name}${if (c.comment.isNotBlank()) " — ${c.comment}" else ""}",
+                color = if (c.ok) Color.White else Warn)
+        }
+        Hint("Телефон проверяет по критериям задания. Подробный разбор с исправлениями Claude пришлёт позже (вкладка «Прогресс»).")
+    }
+}
+
+@Composable
+fun PreparedStep(step: Step.Prepared, host: TaskHost) {
+    val task = step.task
+    val mode = step.kind.mode
+    var prepLeft by remember { mutableIntStateOf(task.prepSeconds) }
     var materialHidden by remember { mutableStateOf(false) }
-    var answer by remember { mutableStateOf("") }
-    var checking by remember { mutableStateOf(false) }
-    var result by remember { mutableStateOf<Evaluation?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var failures by remember { mutableIntStateOf(0) }
+    var main by remember { mutableStateOf("") }
+    val answers = remember { mutableStateListOf(*Array(task.items.size) { "" }) }
+    var revealed by remember { mutableIntStateOf(if (mode == AnswerMode.DIALOG) 1 else task.items.size) }
+    var result by remember { mutableStateOf<LocalCheck.Result?>(null) }
+    var attempts by remember { mutableIntStateOf(0) }
+    val startedAt = remember { SystemClock.elapsedRealtime() }
+    var elapsed by remember { mutableLongStateOf(0L) }
 
     LaunchedEffect(Unit) {
-        while (prepLeft > 0) { delay(1000); prepLeft--; host.alive() }
-    }
-
-    fun submit() {
-        val tutor = host.tutor ?: return
-        if (checking || answer.isBlank()) return
-        checking = true; error = null
-        scope.launch {
-            val r = runCatching { host.busy { tutor.evaluate(step.kind, spec, answer) } }
-            checking = false
-            r.onSuccess { e ->
-                result = e
-                host.record(step.kind, spec.title, e)
-            }.onFailure { error = errorText(it); failures++ }
+        if (mode == AnswerMode.DIALOG) task.items.firstOrNull()?.let { host.speak(it.text) }
+        while (true) {
+            delay(1000)
+            elapsed = (SystemClock.elapsedRealtime() - startedAt) / 1000
+            if (prepLeft > 0) { prepLeft--; host.alive() }
         }
     }
 
-    Hint(spec.instructionsRu)
-    if (spec.material.isNotBlank()) {
+    val passed = result?.passed == true
+    fun answerFile() = AnswerFile(
+        taskId = "", kind = "", answeredAt = "", main = main, items = answers.toList(),
+        criteria = result?.criteria.orEmpty(), passed = passed, attempts = attempts,
+    )
+    fun check() {
+        attempts++
+        result = LocalCheck.check(task, main, answers.toList(), elapsed)
+    }
+    fun edit(change: () -> Unit) { change(); host.alive(); if (result?.passed == false) result = null }
+
+    Hint(task.instructionsRu)
+    if (task.material.isNotBlank()) {
         if (!materialHidden) Panel {
-            Text(spec.material, fontSize = 17.sp, lineHeight = 24.sp)
+            Text(task.material, fontSize = 17.sp, lineHeight = 24.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (spec.speakMaterial) OutlinedButton(onClick = { host.speak(spec.material) }) { Text("🔊 Прослушать") }
-                if (spec.hideMaterial) Button(onClick = { host.stopSpeaking(); materialHidden = true }) { Text("Прочитал(а)") }
+                if (task.speakMaterial) OutlinedButton(onClick = { host.speak(task.material) }) { Text("🔊 Прослушать") }
+                if (task.hideMaterial) Button(onClick = { host.stopSpeaking(); materialHidden = true }) { Text("Прочитал(а)") }
             }
-        } else if (result?.passed != true) {
+        } else if (!passed) {
             OutlinedButton(onClick = { materialHidden = false }) { Text("Показать текст ещё раз") }
         }
     }
-    if (spec.items.isNotEmpty()) Panel {
-        spec.items.forEachIndexed { i, s -> Text("${i + 1}. $s", fontSize = 16.sp) }
+    if (task.words.isNotEmpty()) Text("Слова: ${task.words.joinToString(" · ") { it.word }}", color = Warn)
+    if (task.grammar.isNotEmpty()) Text("Грамматика: ${task.grammar.joinToString(" · ") { it.hintRu.ifBlank { it.id } }}", color = Warn)
+    if (task.minMinutes > 0) {
+        val left = (task.minMinutes * 60L - elapsed).coerceAtLeast(0)
+        Text(if (left == 0L) "✓ ${task.minMinutes} мин" else "⏳ Ещё %d:%02d".format(left / 60, left % 60), color = Muted)
     }
-    if (spec.targetWords.isNotEmpty()) Text("Слова: ${spec.targetWords.joinToString(" · ")}", color = Warn)
-    grammarNames(spec.targetGrammar).takeIf { it.isNotEmpty() }?.let { Text("Грамматика: ${it.joinToString(" · ")}", color = Warn) }
 
     if (prepLeft > 0) {
+        if (task.items.isNotEmpty() && mode == AnswerMode.SINGLE) Panel { task.items.forEachIndexed { i, it -> Text("${i + 1}. ${it.text}") } }
         Text("Подготовка: $prepLeft с", fontSize = 22.sp)
         OutlinedButton(onClick = { prepLeft = 0 }) { Text("Начать сейчас") }
         return
     }
     // For a retell the text must be hidden before answering.
-    if (spec.hideMaterial && !materialHidden && spec.material.isNotBlank() && result == null) {
+    if (task.hideMaterial && !materialHidden && task.material.isNotBlank() && result == null) {
         Hint("Когда прочитаешь, нажми «Прочитал(а)» — текст скроется, и можно будет отвечать.")
         return
     }
 
-    val passed = result?.passed == true
-    AnswerField(answer, { answer = it; host.alive() }, enabled = !checking && !passed, label = "Ответ (можно голосом с клавиатуры)", minLines = 6)
-    val words = wordCount(answer)
-    if (spec.minWords > 0) Text("Слов: $words / ${spec.minWords}", color = if (words >= spec.minWords) Good else Muted)
-
-    if (!passed) Button(onClick = ::submit, enabled = !checking && answer.isNotBlank(), modifier = Modifier.fillMaxWidth().height(56.dp)) {
-        Text(if (checking) "Claude проверяет…" else if (result == null) "Проверить" else "Отправить исправленный ответ", fontSize = 17.sp)
-    }
-    if (checking) CircularProgressIndicator()
-    error?.let { Text(it, color = Bad) }
-    if (failures >= 2 && !passed) OutlinedButton(onClick = { host.complete(StepResult(false)) }, modifier = Modifier.fillMaxWidth()) {
-        Text("Claude не отвечает — задание без сети")
-    }
-    result?.let { EvaluationView(it) }
-    if (passed) Button(onClick = { host.complete(StepResult(true)) }, modifier = Modifier.fillMaxWidth().height(56.dp)) {
-        Text("Готово ✓", fontSize = 18.sp)
-    }
-}
-
-@Composable
-fun EvaluationView(e: Evaluation) {
-    Panel {
-        Text(if (e.passed) "Засчитано ✓" else "Пока не засчитано", color = if (e.passed) Good else Bad,
-            fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
-        e.criteria.forEach { c ->
-            Text("${if (c.ok) "✓" else "✗"} ${c.name}${if (c.comment.isNotBlank()) " — ${c.comment}" else ""}",
-                color = if (c.ok) Color.White else Warn)
+    when (mode) {
+        AnswerMode.SINGLE -> {
+            if (task.items.isNotEmpty()) Panel { task.items.forEachIndexed { i, it -> Text("${i + 1}. ${it.text}") } }
+            AnswerField(main, { v -> edit { main = v } }, enabled = !passed, label = "Ответ (можно голосом с клавиатуры)", minLines = 6)
         }
-        if (e.feedbackRu.isNotBlank()) Text(e.feedbackRu, color = Muted)
-        if (e.corrections.isNotEmpty()) {
-            Text("Исправления:", fontWeight = FontWeight.SemiBold)
-            e.corrections.forEach { c -> Text("• ${c.wrong} → ${c.right}${if (c.why.isNotBlank()) " (${c.why})" else ""}") }
+        AnswerMode.PER_ITEM, AnswerMode.MAIN_AND_ITEMS -> {
+            if (mode == AnswerMode.MAIN_AND_ITEMS) {
+                AnswerField(main, { v -> edit { main = v } }, enabled = !passed, label = "Пересказ (можно голосом)", minLines = 5)
+            }
+            task.items.forEachIndexed { i, item ->
+                Text("${i + 1}. ${item.text}", fontWeight = FontWeight.SemiBold)
+                AnswerField(answers[i], { v -> edit { answers[i] = v } }, enabled = !passed, label = "Ответ ${i + 1}", minLines = 2)
+            }
         }
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
-// Role-plays
-// ---------------------------------------------------------------------------------------------
-
-private data class Line(val ai: Boolean, val text: String, val correction: String = "")
-
-@Composable
-fun ChatStep(step: Step.Chat, host: TaskHost) {
-    val spec = step.spec
-    val scope = rememberCoroutineScope()
-    val lines = remember { mutableStateListOf(Line(true, spec.opening)) }
-    val usedWords = remember { mutableStateListOf<String>() }
-    val usedGrammar = remember { mutableStateListOf<String>() }
-    var goal by remember { mutableStateOf(false) }
-    var input by remember { mutableStateOf("") }
-    var sending by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var failures by remember { mutableIntStateOf(0) }
-    val startedAt = remember { SystemClock.elapsedRealtime() }
-    var elapsed by remember { mutableLongStateOf(0L) }
-    var debrief by remember { mutableStateOf<Evaluation?>(null) }
-    var finishing by remember { mutableStateOf(false) }
-
-    LaunchedEffect(Unit) { host.speak(spec.opening) }
-    LaunchedEffect(Unit) {
-        while (true) { elapsed = (SystemClock.elapsedRealtime() - startedAt) / 1000; delay(1000) }
-    }
-
-    val isDialog = step.kind == TaskKind.DIALOG
-    val wordsOk = usedWords.size >= step.words
-    val grammarOk = usedGrammar.size >= step.grammar
-    val timeOk = elapsed >= step.minutes * 60L
-    val complete = if (isDialog) wordsOk && grammarOk && timeOk else goal
-
-    fun transcript() = lines.map { it.ai to it.text }
-
-    fun send() {
-        val tutor = host.tutor ?: return
-        val text = input.trim()
-        if (sending || text.isEmpty()) return
-        sending = true; error = null
-        lines += Line(false, text)
-        input = ""
-        scope.launch {
-            val r = runCatching { host.busy { tutor.chatTurn(step.kind, spec, transcript()) } }
-            sending = false
-            r.onSuccess { t ->
-                val i = lines.lastIndex
-                if (t.correction.isNotBlank()) lines[i] = lines[i].copy(correction = t.correction)
-                t.usedWords.forEach { w ->
-                    val match = spec.targetWords.firstOrNull { it.equals(w.trim(), ignoreCase = true) } ?: w.trim().lowercase()
-                    if (match.isNotEmpty() && match !in usedWords) usedWords += match
+        AnswerMode.DIALOG -> {
+            task.items.take(revealed).forEachIndexed { i, item ->
+                Text(item.text, fontSize = 16.sp, modifier = Modifier.widthIn(max = 320.dp)
+                    .background(CardBg, RoundedCornerShape(12.dp)).padding(10.dp))
+                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+                    AnswerField(answers[i], { v -> edit { answers[i] = v } }, enabled = !passed, label = "Твоя реплика", minLines = 2)
                 }
-                t.usedGrammar.filter { it in spec.targetGrammar && it !in usedGrammar }.forEach { usedGrammar += it }
-                if (t.goalReached) goal = true
-                lines += Line(true, t.reply)
-                host.speak(t.reply)
-            }.onFailure {
-                // Put the message back so it can be sent again.
-                lines.removeAt(lines.lastIndex)
-                input = text
-                error = errorText(it); failures++
+            }
+            if (revealed < task.items.size) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = {
+                        revealed++
+                        host.speak(task.items[revealed - 1].text)
+                    }, enabled = answers[revealed - 1].isNotBlank(), modifier = Modifier.weight(1f).height(52.dp)) { Text("Ответить") }
+                    OutlinedButton(onClick = { host.speak(task.items[revealed - 1].text) }, modifier = Modifier.height(52.dp)) { Text("🔊") }
+                }
             }
         }
     }
+    val words = LocalCheck.wordCount(if (mode == AnswerMode.DIALOG) answers.joinToString(" ") else main)
+    if (task.minWords > 0) Text("Слов: $words / ${task.minWords}", color = if (words >= task.minWords) Good else Muted)
 
-    fun finishChat() {
-        val tutor = host.tutor
-        if (finishing) return
-        finishing = true
-        scope.launch {
-            val e = tutor?.let { t -> runCatching { host.busy { t.chatEvaluation(step.kind, spec, transcript()) } }.getOrNull() }
-            if (e != null) {
-                // The app decides pass/fail; the debrief only adds corrections and notes.
-                val fixed = e.copy(criteria = e.criteria.map { it.copy(ok = true) })
-                host.record(step.kind, spec.title, fixed)
-                debrief = fixed
-            } else host.complete(StepResult(true))
-            finishing = false
-        }
+    val ready = when (mode) {
+        AnswerMode.SINGLE -> main.isNotBlank()
+        AnswerMode.MAIN_AND_ITEMS -> main.isNotBlank()
+        AnswerMode.PER_ITEM -> answers.any { it.isNotBlank() }
+        AnswerMode.DIALOG -> revealed >= task.items.size && answers.last().isNotBlank()
     }
-
-    Hint(spec.situationRu)
-    Text("Цель: ${spec.userGoalRu}", color = Warn)
-    Panel {
-        if (isDialog) {
-            val left = (step.minutes * 60L - elapsed).coerceAtLeast(0)
-            Text("${if (timeOk) "✓" else "⏳"} Время: ${if (timeOk) "${step.minutes} мин" else "%d:%02d".format(left / 60, left % 60)}")
-            Text("${if (wordsOk) "✓" else "•"} Слова (${usedWords.size}/${step.words}): " +
-                spec.targetWords.joinToString(" · ") { if (it in usedWords) "✓$it" else it })
-            Text("${if (grammarOk) "✓" else "•"} Грамматика (${usedGrammar.size}/${step.grammar}): " +
-                spec.targetGrammar.mapNotNull { id -> Curriculum.grammar(id)?.let { (if (id in usedGrammar) "✓" else "") + it.ru } }.joinToString(" · "))
-        } else {
-            Text("${if (goal) "✓" else "•"} Цель достигнута")
-            if (spec.targetWords.isNotEmpty()) Text("Пригодятся слова: ${spec.targetWords.joinToString(" · ")}", color = Muted)
-        }
+    if (!passed) Button(onClick = ::check, enabled = ready, modifier = Modifier.fillMaxWidth().height(56.dp)) {
+        Text(if (attempts == 0) "Проверить" else "Проверить снова", fontSize = 17.sp)
     }
-
-    lines.forEach { l ->
-        Column(Modifier.fillMaxWidth(), horizontalAlignment = if (l.ai) Alignment.Start else Alignment.End) {
-            Text(
-                l.text,
-                fontSize = 16.sp,
-                modifier = Modifier
-                    .widthIn(max = 320.dp)
-                    .background(if (l.ai) CardBg else Color(0xFF1E3A5F), RoundedCornerShape(12.dp))
-                    .padding(10.dp),
-            )
-            if (l.correction.isNotBlank()) Text("✎ ${l.correction}", color = Warn, fontSize = 14.sp)
-        }
-    }
-    if (sending) CircularProgressIndicator()
-    error?.let { Text(it, color = Bad) }
-
-    val d = debrief
-    if (d != null) {
-        EvaluationView(d)
-        Button(onClick = { host.complete(StepResult(true)) }, modifier = Modifier.fillMaxWidth().height(56.dp)) { Text("Готово ✓") }
-        return
-    }
-    if (complete) {
-        Button(onClick = ::finishChat, enabled = !finishing, modifier = Modifier.fillMaxWidth().height(56.dp)) {
-            Text(if (finishing) "Claude подводит итог…" else "Завершить диалог ✓", fontSize = 17.sp)
-        }
-    }
-    AnswerField(input, { input = it; host.alive() }, enabled = !sending, label = "Твоя реплика (можно голосом)", minLines = 2)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = ::send, enabled = !sending && input.isNotBlank(), modifier = Modifier.weight(1f).height(52.dp)) { Text("Отправить") }
-        OutlinedButton(onClick = { lines.lastOrNull { it.ai }?.let { host.speak(it.text) } }, modifier = Modifier.height(52.dp)) { Text("🔊") }
-    }
-    if (failures >= 2) OutlinedButton(onClick = { host.complete(StepResult(false)) }, modifier = Modifier.fillMaxWidth()) {
-        Text("Claude не отвечает — задание без сети")
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
-// Explain the word
-// ---------------------------------------------------------------------------------------------
-
-@Composable
-fun AliasStep(step: Step.Alias, host: TaskHost) {
-    val scope = rememberCoroutineScope()
-    var index by remember { mutableIntStateOf(0) }
-    var solved by remember { mutableIntStateOf(0) }
-    val explanations = remember { mutableStateListOf<String>() }
-    val wrong = remember { mutableStateListOf<String>() }
-    var input by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    var message by remember { mutableStateOf<String?>(null) }
-    var roundOver by remember { mutableStateOf<Boolean?>(null) } // true = guessed, false = failed
-    val missed = remember { mutableStateListOf<Long>() }
-    val guessed = remember { mutableStateListOf<Long>() }
-    var failures by remember { mutableIntStateOf(0) }
-
-    val word = step.words.getOrNull(index)
-    if (word == null) {
-        // Ran out of words: count what was achieved.
-        LaunchedEffect(Unit) { host.complete(StepResult(solved >= step.required, missed.toSet(), guessed.toSet())) }
-        return
-    }
-
-    fun nextWord() {
-        if (solved >= step.required) {
-            host.complete(StepResult(true, missed.toSet(), guessed.toSet()))
-            return
-        }
-        index++; explanations.clear(); wrong.clear(); input = ""; message = null; roundOver = null
-    }
-
-    fun forbiddenUsed(text: String): Boolean {
-        val tokens = TextUtil.normalize(text).split(Regex("""[^\p{L}']+""")).filter { it.isNotEmpty() }
-        return word.variants.any { v ->
-            val parts = v.split(' ').filter { it.length >= 3 }
-            parts.any { p ->
-                val root = if (p.length >= 5) p.take(p.length - 2) else p
-                tokens.any { it == p || (root.length >= 4 && it.startsWith(root)) }
-            }
-        }
-    }
-
-    fun matches(guess: String): Boolean = TextUtil.isTypedAnswerCorrect(TextUtil.stripArticle(guess), word.variants)
-
-    fun send() {
-        val tutor = host.tutor ?: return
-        val text = input.trim()
-        if (busy || text.isEmpty() || roundOver != null) return
-        if (forbiddenUsed(text)) { message = "Нельзя называть само слово или однокоренные — перефразируй"; return }
-        busy = true; message = null
-        explanations += text
-        input = ""
-        scope.launch {
-            val r = runCatching { host.busy { tutor.aliasGuess(explanations.toList(), wrong.toList()) } }
-            busy = false
-            r.onSuccess { g ->
-                if (matches(g.guess)) {
-                    solved++; guessed += word.noteId; roundOver = true
-                    message = "Claude угадал: «${g.guess}» ✓"
-                } else {
-                    wrong += g.guess
-                    if (wrong.size >= 2) {
-                        missed += word.noteId; roundOver = false
-                        message = "Claude не угадал («${wrong.joinToString("», «")}»)"
-                    } else message = "Claude думает, что это «${g.guess}». Добавь подсказку."
-                }
-            }.onFailure { explanations.removeAt(explanations.lastIndex); input = text; message = errorText(it); failures++ }
-        }
-    }
-
-    Text("Угадано: $solved / ${step.required}", color = Muted)
-    Hint("Объясни слово по-английски, не называя его и однокоренные. У Claude две попытки.")
-    Text(word.main, fontSize = 30.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-    Text(word.ru, color = Muted, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-    explanations.forEach { Text("› $it") }
-    if (roundOver == null) {
-        AnswerField(input, { input = it; host.alive() }, enabled = !busy, label = "Объяснение (можно голосом)", minLines = 3)
-        Button(onClick = ::send, enabled = !busy && input.isNotBlank(), modifier = Modifier.fillMaxWidth().height(52.dp)) {
-            Text(if (busy) "Claude угадывает…" else "Отправить")
-        }
-    }
-    message?.let { Text(it, color = if (roundOver == true) Good else Warn) }
-    if (roundOver != null) Button(onClick = ::nextWord, modifier = Modifier.fillMaxWidth().height(52.dp)) {
-        Text(if (solved >= step.required) "Готово ✓" else "Следующее слово")
-    }
-    if (failures >= 2) OutlinedButton(onClick = { host.complete(StepResult(false)) }, modifier = Modifier.fillMaxWidth()) {
-        Text("Claude не отвечает — задание без сети")
-    }
+    result?.let { CriteriaView(it.criteria, it.passed) }
+    if (passed) Button(onClick = { host.complete(StepResult(true, answer = answerFile())) },
+        modifier = Modifier.fillMaxWidth().height(56.dp)) { Text("Готово ✓", fontSize = 18.sp) }
+    // If the criteria turn out impossible to meet, the answer still goes to Claude and an offline task follows.
+    if (!passed && attempts >= 3) OutlinedButton(onClick = { host.complete(StepResult(false, answer = answerFile())) },
+        modifier = Modifier.fillMaxWidth()) { Text("Не получается — отправить на разбор и перейти к переводу слов") }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -516,6 +304,13 @@ fun DictationStep(step: Step.Dictate, host: TaskHost) {
 
     LaunchedEffect(Unit) { delay(600); host.speak(d.spoken) }
 
+    fun result(ok: Boolean) = StepResult(ok, answer = AnswerFile(
+        taskId = "", kind = "", answeredAt = "", passed = ok, attempts = checks,
+        items = inputs.toList(),
+        missedWords = d.gaps.filter { it.index in wrong }.map { "${it.answer} (написано: «${inputs[it.index]}»)" },
+        correctWords = d.gaps.filter { it.index !in wrong }.map { it.answer },
+    ))
+
     Hint("Послушай и впиши пропущенные слова. Можно слушать сколько угодно раз.")
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = { host.speak(d.spoken, if (slow) 0.6f else 0.85f) }) { Text("▶ Прослушать") }
@@ -528,9 +323,8 @@ fun DictationStep(step: Step.Dictate, host: TaskHost) {
                 is Dictation.Part.Gap -> {
                     val i = part.index
                     val bad = i in wrong
-                    val shown = if (revealed && bad) part.answer else inputs[i]
                     BasicTextField(
-                        value = shown,
+                        value = if (revealed && bad) part.answer else inputs[i],
                         onValueChange = { v -> if (!revealed && !passed) { inputs[i] = v; wrong = wrong - i; host.alive() } },
                         singleLine = true,
                         textStyle = TextStyle(color = if (bad) Bad else Color.White, fontSize = 17.sp),
@@ -552,17 +346,15 @@ fun DictationStep(step: Step.Dictate, host: TaskHost) {
             w.size <= d.allowedMistakes -> passed = true
             checks >= 3 -> revealed = true
         }
-    }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Проверить (${checks}/3)") }
+    }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Проверить ($checks/3)") }
     if (wrong.isNotEmpty() && !passed && !revealed) Text("Ошибок: ${wrong.size}, можно ${d.allowedMistakes}. Красные поля — исправь.", color = Warn)
     if (passed) {
         Text("Засчитано ✓${if (wrong.isNotEmpty()) " (ошибок: ${wrong.size})" else ""}", color = Good)
         if (wrong.isNotEmpty()) Text(d.gaps.filter { it.index in wrong }.joinToString { it.answer }, color = Warn)
-        Button(onClick = { host.complete(StepResult(true, missedWords = d.gaps.filter { it.index in wrong }.map { it.answer })) },
-            modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Готово ✓") }
+        Button(onClick = { host.complete(result(true)) }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Готово ✓") }
     }
     if (revealed) {
         Text("Три попытки кончились — ответы показаны красным.", color = Bad)
-        Button(onClick = { host.complete(StepResult(false, missedWords = d.gaps.filter { it.index in wrong }.map { it.answer })) },
-            modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Дальше") }
+        Button(onClick = { host.complete(result(false)) }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Дальше") }
     }
 }

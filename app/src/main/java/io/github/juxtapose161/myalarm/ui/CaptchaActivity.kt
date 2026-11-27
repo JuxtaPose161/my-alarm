@@ -13,18 +13,14 @@ import com.urbandroid.sleep.captcha.CaptchaSupportFactory
 import com.urbandroid.sleep.captcha.RemainingTimeListener
 import io.github.juxtapose161.myalarm.SettingsStore
 import io.github.juxtapose161.myalarm.anki.AnkiRepository
+import io.github.juxtapose161.myalarm.course.AnswerFile
 import io.github.juxtapose161.myalarm.course.CourseStore
 import io.github.juxtapose161.myalarm.course.Dictation
 import io.github.juxtapose161.myalarm.course.Engine
-import io.github.juxtapose161.myalarm.course.LearnerProfile
-import io.github.juxtapose161.myalarm.course.TaskParams
-import io.github.juxtapose161.myalarm.course.Evaluation
-import io.github.juxtapose161.myalarm.course.PreparedTask
-import io.github.juxtapose161.myalarm.course.Preparer
+import io.github.juxtapose161.myalarm.course.LocalHistory
 import io.github.juxtapose161.myalarm.course.Scenario
 import io.github.juxtapose161.myalarm.course.TaskKind
-import io.github.juxtapose161.myalarm.course.Tutor
-import io.github.juxtapose161.myalarm.llm.ClaudeClient
+import io.github.juxtapose161.myalarm.data.Sync
 import io.github.juxtapose161.myalarm.quiz.QuizSession
 import io.github.juxtapose161.myalarm.quiz.TaskGenerator
 import io.github.juxtapose161.myalarm.quiz.TaskType
@@ -32,13 +28,9 @@ import io.github.juxtapose161.myalarm.quiz.TranslateSession
 import io.github.juxtapose161.myalarm.quiz.Word
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -47,22 +39,16 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
-/** Outlives the activity: saving results and talking to Claude after the alarm is off. */
+/** Outlives the activity: saving results after the alarm is off. */
 val AppScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 /** What a task screen can use. */
 interface TaskHost {
-    val tutor: Tutor?
     val preview: Boolean
-    val checkSynonyms: Boolean
     fun speak(text: String, rate: Float = 0.85f)
     fun stopSpeaking()
     /** Tells Sleep the user is still busy with the captcha (the alarm stays quiet). */
     fun alive()
-    /** Runs a slow call (Claude) while keeping the captcha alive. */
-    suspend fun <T> busy(block: suspend () -> T): T
-    /** Saves a task checked by Claude to the learner profile. */
-    fun record(kind: TaskKind, title: String, evaluation: Evaluation)
     /** The step is over; the next one starts (or the alarm stops). */
     fun complete(result: StepResult)
 }
@@ -70,6 +56,8 @@ interface TaskHost {
 /**
  * The screen Sleep as Android opens when the alarm rings.
  * The scenario (by time of day) decides the tasks: warm-up cards, then the main task(s).
+ * Tasks prepared by Claude come from the synced stock; without one, translation or cards are used,
+ * so the alarm can always be stopped without network.
  * solved() stops the alarm; unsolved() (back button) returns to the ringing alarm.
  */
 class CaptchaActivity : ComponentActivity(), TaskHost {
@@ -84,21 +72,18 @@ class CaptchaActivity : ComponentActivity(), TaskHost {
 
     private val timeListener = RemainingTimeListener { seconds, _ -> remaining.value = seconds }
     private val startedAt = SystemClock.elapsedRealtime()
+    private var stepStartedAt = SystemClock.elapsedRealtime()
 
-    // Filled in prepare().
     private lateinit var store: SettingsStore
     private lateinit var course: CourseStore
     private lateinit var scenario: Scenario
     private var words: List<Word> = emptyList()
     private var difficulty = 3
-    private var claudeTutor: Tutor? = null
-    private var synonyms = false
-    private var planned: List<Deferred<Pair<Step, String?>>> = emptyList()
+    private var steps: MutableList<Step> = mutableListOf()
     private var stepIndex = 0
+    private var generation = 0
 
-    override val tutor get() = claudeTutor
     override val preview get() = !captcha.isOperationalMode || intent.hasExtra(EXTRA_TEST_DIFFICULTY)
-    override val checkSynonyms get() = synonyms
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -148,35 +133,18 @@ class CaptchaActivity : ComponentActivity(), TaskHost {
     override fun stopSpeaking() { speaker?.stop() }
     override fun alive() { captcha.alive() }
 
-    override suspend fun <T> busy(block: suspend () -> T): T = coroutineScope {
-        val ticker = launch {
-            while (isActive) {
-                captcha.alive()
-                delay(15_000)
-            }
-        }
-        try { block() } finally { ticker.cancel() }
-    }
-
-    override fun record(kind: TaskKind, title: String, evaluation: Evaluation) {
-        if (preview) return
-        val t = claudeTutor ?: return
-        AppScope.launch { runCatching { t.record(kind, title, evaluation) } }
-    }
-
     override fun complete(result: StepResult) {
         val ui = screen.value as? CaptchaUi.Run ?: return
         saveResult(ui.step, result)
         if (!result.passed) {
             // A failed task is replaced by an offline one: the alarm must always be stoppable.
-            lifecycleScope.launch {
-                val sub = offlineStep(ui.step.kind)
-                show(sub, "«${ui.step.kind.title}» не засчитано — вместо него: ${sub.kind.title}", sameIndex = true)
-            }
+            val sub = offlineStep()
+            steps[stepIndex] = sub
+            show("«${ui.step.title}» не засчитано — вместо него: ${sub.kind.title}")
             return
         }
         stepIndex++
-        if (stepIndex >= planned.size) onSolved() else lifecycleScope.launch { showPlanned() }
+        if (stepIndex >= steps.size) onSolved() else show(null)
     }
 
     // --- flow ---
@@ -186,9 +154,6 @@ class CaptchaActivity : ComponentActivity(), TaskHost {
         course = CourseStore(this)
         val settings = store.load()
         val repo = AnkiRepository(this)
-        val claude = course.claude
-        synonyms = claude.checkSynonyms && claude.enabled
-        if (claude.enabled) claudeTutor = Tutor(ClaudeClient(claude), course)
 
         val testDifficulty = intent.getIntExtra(EXTRA_TEST_DIFFICULTY, 0)
         difficulty = (if (testDifficulty in 1..5) testDifficulty else captcha.difficulty).coerceIn(1, 5)
@@ -207,107 +172,71 @@ class CaptchaActivity : ComponentActivity(), TaskHost {
         scenario = scenarios.firstOrNull { it.id == testScenario }
             ?: Scenario.pick(scenarios, Calendar.getInstance().let { it.get(Calendar.HOUR_OF_DAY) * 60 + it.get(Calendar.MINUTE) })
 
-        val kinds = mutableListOf<TaskKind>()
-        val warmup = if (testKind == null) scenario.warmupCards else 0
-        val history = course.profile.history.toMutableList()
-        if (testKind != null) kinds += testKind else repeat(scenario.tasks.coerceAtLeast(1)) {
-            val k = Scenario.chooseKind(scenario.kindList, history, claude.enabled, words.isNotEmpty())
-            kinds += k
-            history += LearnerProfile.HistoryEntry("", k.name, "", true)
+        var notice: String? = null
+        val list = mutableListOf<Step>()
+        if (testKind == null && scenario.warmupCards > 0) list += quick(scenario.warmupCards, warmup = true)
+        val history = course.history.map { it.kind }.toMutableList()
+        val fallback = if (words.size >= 2) TaskKind.TRANSLATE else TaskKind.QUICK
+        val count = if (testKind != null) 1 else scenario.tasks.coerceAtLeast(1)
+        repeat(count) {
+            val kind = testKind ?: Scenario.chooseKind(scenario.kindList, history, ::available, fallback)
+            history += kind.name
+            val step = withContext(Dispatchers.IO) { build(kind) }
+            if (step == null) {
+                notice = if (kind.prepared) "Нет готового задания «${kind.title}» — нужна синхронизация. Вместо него: ${fallback.title}"
+                else "Нет слов из Anki — вместо перевода карточки"
+                list += offlineStep()
+            } else list += step
         }
-
-        // Main tasks are resolved in the background while the warm-up runs.
-        val list = mutableListOf<Deferred<Pair<Step, String?>>>()
-        if (warmup > 0) list += CompletableDeferred(quick(warmup, warmup = true) to null)
-        kinds.forEach { k -> list += lifecycleScope.async { resolve(k) } }
-        planned = list
-        showPlanned()
+        steps = list
+        show(notice)
     }
 
-    private suspend fun showPlanned() {
-        val deferred = planned[stepIndex]
-        if (!deferred.isCompleted) screen.value = CaptchaUi.Loading("Claude готовит задание…")
-        val (step, notice) = busy { deferred.await() }
-        show(step, notice)
+    private fun available(kind: TaskKind): Boolean = when (kind.engine) {
+        Engine.QUICK -> true
+        Engine.TRANSLATE -> words.size >= 2
+        Engine.PREPARED, Engine.DICTATION -> (course.stock()[kind] ?: 0) > 0
     }
 
-    private fun show(step: Step, notice: String?, sameIndex: Boolean = false) {
-        val prev = screen.value as? CaptchaUi.Run
+    private fun build(kind: TaskKind): Step? = when (kind.engine) {
+        Engine.QUICK -> quick(TaskGenerator.requiredFor(difficulty), warmup = false)
+        Engine.TRANSLATE -> if (words.size >= 2) translate() else null
+        Engine.PREPARED -> course.takeTask(kind)?.let { Step.Prepared(kind, it) }
+        Engine.DICTATION -> course.takeTask(kind)?.let { t ->
+            Dictation(t).takeIf { it.gaps.isNotEmpty() }?.let { Step.Dictate(t, it) }
+        }
+    }
+
+    private fun show(notice: String?) {
+        generation++
+        stepStartedAt = SystemClock.elapsedRealtime()
         screen.value = CaptchaUi.Run(
-            step = step,
+            step = steps[stepIndex],
             index = stepIndex,
-            total = planned.size,
+            total = steps.size,
             notice = notice,
             scenario = scenario.name,
             preview = preview,
-            generation = (prev?.generation ?: 0) + 1,
+            generation = generation,
         )
-        if (!sameIndex) captcha.alive()
-    }
-
-    /** Builds the step for [kind]: a prepared task, a freshly generated one or an offline substitute. */
-    private suspend fun resolve(kind: TaskKind): Pair<Step, String?> {
-        val params = course.params
-        when (kind.engine) {
-            Engine.QUICK -> return quick(TaskGenerator.requiredFor(difficulty), warmup = false) to null
-            Engine.TRANSLATE -> return offlineStep(kind) to null
-            Engine.ALIAS -> {
-                val pool = words.filter { it.main.length in 3..24 }
-                return if (claudeTutor != null && pool.size >= params.aliasWords) {
-                    Step.Alias(pool.take(30), params.aliasWords) to null
-                } else offlineStep(kind) to "Для «${kind.title}» нужны Claude и слова из Anki — вместо него перевод слов"
-            }
-            else -> Unit
-        }
-        val t = claudeTutor
-        // Answers to written tasks and role-plays are checked by Claude, so they need a key; a dictation does not.
-        if (t == null && kind.engine != Engine.DICTATION) {
-            return offlineStep(kind) to "Для «${kind.title}» нужен ключ Claude — вместо него задание без сети"
-        }
-        val level = course.profile.level
-        var task: PreparedTask? = withContext(Dispatchers.IO) { course.takePrepared(kind, level) }
-        if (task == null && t != null) {
-            task = withTimeoutOrNull(75_000) {
-                runCatching { t.prepare(kind, words.map { it.main }.take(40)) }.getOrNull()
-            }
-        }
-        if (task != null) Preparer.runNow(applicationContext)
-        val step = task?.let { toStep(kind, it, params) }
-            ?: return offlineStep(kind) to "Claude сейчас недоступен — вместо «${kind.title}» задание без сети"
-        return step to null
-    }
-
-    private fun toStep(kind: TaskKind, t: PreparedTask, p: TaskParams): Step? = when {
-        t.written != null -> Step.Written(kind, t.written)
-        t.chat != null -> Step.Chat(
-            kind, t.chat,
-            minutes = if (kind == TaskKind.DIALOG) p.dialogMinutes else 0,
-            words = if (kind == TaskKind.DIALOG) minOf(p.dialogWords, t.chat.targetWords.size) else 0,
-            grammar = if (kind == TaskKind.DIALOG) minOf(p.dialogGrammar, t.chat.targetGrammar.size) else 0,
-        )
-        t.dictation != null -> Dictation(t.dictation).takeIf { it.gaps.isNotEmpty() }?.let { Step.Dictate(it) }
-        else -> null
+        captcha.alive()
     }
 
     private fun quick(required: Int, warmup: Boolean): Step.Quick {
-        val settings = store.load()
-        var types = settings.types
+        var types = store.load().types
         if (speaker?.ready != true) types = types - TaskType.AUDIO
         return Step.Quick(QuizSession(TaskGenerator(words, types, difficulty), required), warmup)
     }
 
-    /** Task 1 (translation) if there are words, otherwise cards with math. Works without network. */
-    @Suppress("UNUSED_PARAMETER")
-    private fun offlineStep(instead: TaskKind): Step {
-        val n = course.params.translateWords
-        return if (words.size >= 2) {
-            // Mistakes and due cards first (the order from Anki), the rest mixed.
-            Step.Translate(TranslateSession(words.take(10) + words.drop(10).shuffled(), n))
-        } else {
-            Step.Quick(QuizSession(TaskGenerator(words, setOf(TaskType.MATH, TaskType.CHOICE, TaskType.TYPING), difficulty),
-                TaskGenerator.requiredFor(difficulty)), warmup = false)
-        }
-    }
+    private fun translate() =
+        // Mistakes and due cards first (the order from Anki), the rest mixed.
+        Step.Translate(TranslateSession(words.take(10) + words.drop(10).shuffled(), course.params.translateWords))
+
+    /** Translation if there are words, otherwise cards with math. Works without network. */
+    private fun offlineStep(): Step =
+        if (words.size >= 2) translate()
+        else Step.Quick(QuizSession(TaskGenerator(words, setOf(TaskType.MATH, TaskType.CHOICE, TaskType.TYPING), difficulty),
+            TaskGenerator.requiredFor(difficulty)), warmup = false)
 
     private suspend fun watchEscape() {
         while (true) {
@@ -320,27 +249,21 @@ class CaptchaActivity : ComponentActivity(), TaskHost {
 
     /** "No time": math instead of the rest, like a plain alarm. */
     private fun escape() {
+        if (screen.value !is CaptchaUi.Run) return
         escapeVisible.value = false
-        val math = Step.Quick(
+        if (!preview) course.addHistory(LocalHistory(today(), "ESCAPE", scenario.name, false))
+        steps = (steps.take(stepIndex) + Step.Quick(
             QuizSession(TaskGenerator(emptyList(), setOf(TaskType.MATH), difficulty), TaskGenerator.requiredFor(difficulty)),
             warmup = false,
-        )
-        if (!preview) course.updateProfile {
-            it.copy(history = (it.history + LearnerProfile.HistoryEntry(
-                Tutor.today(), "ESCAPE", scenario.name, false, "запасной выход")).takeLast(60))
-        }
-        // The remaining planned tasks are dropped.
-        planned = planned.take(stepIndex + 1)
-        show(math, "Запасной вариант: примеры вместо заданий", sameIndex = true)
+        )).toMutableList()
+        show("Запасной вариант: примеры вместо заданий")
     }
 
     private fun onSolved() {
         if (done) return
         done = true
-        if (!preview) {
-            val day = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
-            store.addHistory("$day|${solvedCorrect}|${solvedMissed}")
-        }
+        if (!preview) store.addHistory("${today()}|$solvedCorrect|$solvedMissed")
+        Sync.soon(applicationContext)
         captcha.solved()
         finish()
     }
@@ -351,26 +274,42 @@ class CaptchaActivity : ComponentActivity(), TaskHost {
     private fun saveResult(step: Step, r: StepResult) {
         solvedCorrect += r.correctNotes.size
         solvedMissed += r.missedNotes.size
-        if (preview) return
-        if (r.missedNotes.isNotEmpty() || r.correctNotes.isNotEmpty()) {
+        if (!preview && (r.missedNotes.isNotEmpty() || r.correctNotes.isNotEmpty())) {
             val learned = r.correctNotes - r.missedNotes
             store.mistakes = (store.mistakes - learned) + r.missedNotes
-            val settings = store.load()
-            if (settings.tagMistakesInAnki && r.missedNotes.isNotEmpty()) {
+            if (store.load().tagMistakesInAnki && r.missedNotes.isNotEmpty()) {
                 val missed = r.missedNotes.toList()
                 val repo = AnkiRepository(applicationContext)
                 AppScope.launch { repo.tagMistakes(missed) }
             }
         }
-        // Tasks checked by Claude are recorded by their screens (with the full evaluation).
-        if (step is Step.Written || step is Step.Chat) return
         if (step is Step.Quick && step.warmup) return
-        val missedWords = r.missedWords.ifEmpty { words.filter { it.noteId in r.missedNotes }.map { it.main } }
-        val usedWords = words.filter { it.noteId in r.correctNotes }.map { it.main }
-        course.updateProfile {
-            it.withResult(Tutor.today(), step.kind, step.title, r.passed, usedWords = usedWords, missedWords = missedWords)
-        }
+        if (!preview) course.addHistory(LocalHistory(today(), step.kind.name, step.title, r.passed))
+
+        // Everything except the warm-up goes to Claude for the review and the profile.
+        val missedWords = words.filter { it.noteId in r.missedNotes }.map { "${it.main} — ${it.ru}" }
+        val correctWords = words.filter { it.noteId in r.correctNotes }.map { it.main }
+        val base = r.answer ?: AnswerFile(taskId = "", kind = step.kind.name, answeredAt = "", passed = r.passed)
+        val answer = base.copy(
+            taskId = when (step) {
+                is Step.Prepared -> step.task.id
+                is Step.Dictate -> step.task.id
+                else -> Sync.localId(step.kind.name)
+            },
+            kind = step.kind.name,
+            title = step.title,
+            answeredAt = Sync.now(),
+            scenario = scenario.name,
+            passed = r.passed,
+            seconds = (SystemClock.elapsedRealtime() - stepStartedAt) / 1000,
+            missedWords = base.missedWords + missedWords,
+            correctWords = base.correctWords + correctWords,
+            preview = preview,
+        )
+        if (course.sync.enabled) course.queueAnswer(answer)
     }
+
+    private fun today() = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
 
     companion object {
         const val EXTRA_TEST_DIFFICULTY = "test_difficulty"

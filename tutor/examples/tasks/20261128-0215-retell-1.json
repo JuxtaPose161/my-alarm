@@ -1,0 +1,160 @@
+{
+  "id": "20261128-0215-retell-1",
+  "kind": "RETELL",
+  "level": "B1",
+  "createdAt": "2026-11-28T02:15:00+03:00",
+  "title": "The bakery that never sleeps",
+  "instructionsRu": "Прочитай или прослушай текст. Потом он скроется: перескажи суть своими словами и ответь на вопросы, используя слова урока.",
+  "material": "When Maria lost her job at a bank, she decided to do something she had always dreamed about: she opened a small bakery in her neighbourhood. At first only her friends came, and she nearly gave up after three months. Then a student posted a video of her night shift on the internet. In the video Maria was baking bread at four in the morning and singing old songs. The video got two million views in a week. Now people queue outside the bakery before sunrise, and Maria has hired four assistants. She says the money is less than at the bank, but she has never been happier.",
+  "hideMaterial": true,
+  "speakMaterial": true,
+  "minWords": 70,
+  "points": [
+    {
+      "nameRu": "потеряла работу в банке",
+      "anyOf": [
+        "lost her job",
+        "lost the job",
+        "was fired",
+        "fired",
+        "bank"
+      ]
+    },
+    {
+      "nameRu": "открыла пекарню",
+      "anyOf": [
+        "bakery",
+        "opened",
+        "baking",
+        "bread"
+      ]
+    },
+    {
+      "nameRu": "сначала было мало клиентов",
+      "anyOf": [
+        "only her friends",
+        "few customers",
+        "nearly gave up",
+        "almost gave up",
+        "at first"
+      ]
+    },
+    {
+      "nameRu": "видео в интернете",
+      "anyOf": [
+        "video",
+        "internet",
+        "online",
+        "views",
+        "viral"
+      ]
+    },
+    {
+      "nameRu": "сейчас очереди и помощники",
+      "anyOf": [
+        "queue",
+        "queues",
+        "line",
+        "assistants",
+        "hired",
+        "popular"
+      ]
+    }
+  ],
+  "needPoints": 4,
+  "items": [
+    {
+      "text": "Why did Maria almost give up?",
+      "points": [
+        {
+          "nameRu": "мало клиентов",
+          "anyOf": [
+            "only her friends",
+            "friends",
+            "few customers",
+            "nobody",
+            "no customers",
+            "not many"
+          ]
+        }
+      ],
+      "needPoints": 1
+    },
+    {
+      "text": "How did the bakery become popular?",
+      "points": [
+        {
+          "nameRu": "видео студента",
+          "anyOf": [
+            "video",
+            "student",
+            "internet",
+            "online",
+            "views"
+          ]
+        }
+      ],
+      "needPoints": 1
+    },
+    {
+      "text": "Why is Maria happier now, although she earns less?",
+      "points": [
+        {
+          "nameRu": "мечта, любимое дело",
+          "anyOf": [
+            "dream",
+            "dreamed",
+            "loves",
+            "enjoys",
+            "likes",
+            "happy",
+            "her own",
+            "passion"
+          ]
+        }
+      ],
+      "needPoints": 1
+    }
+  ],
+  "words": [
+    {
+      "word": "decide",
+      "forms": [
+        "decides",
+        "decided",
+        "deciding",
+        "decision"
+      ]
+    },
+    {
+      "word": "give up",
+      "forms": [
+        "gave up",
+        "given up",
+        "giving up",
+        "gives up"
+      ]
+    },
+    {
+      "word": "hire",
+      "forms": [
+        "hires",
+        "hired",
+        "hiring"
+      ]
+    }
+  ],
+  "needWords": 3,
+  "grammar": [
+    {
+      "id": "b1_past_perfect",
+      "pattern": "\\b(had|hadn't|she'd|he'd|they'd)\\s+(always\\s+|never\\s+|just\\s+|already\\s+)?(\\w+ed|lost|been|done|gone|made|seen|taken|given|found|left|got|bought|thought|known|written|spent|had)\\b",
+      "hintRu": "Past Perfect",
+      "examples": [
+        "she had always dreamed about it",
+        "she had lost her job"
+      ]
+    }
+  ],
+  "needGrammar": 0
+}

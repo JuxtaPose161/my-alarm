@@ -1,0 +1,30 @@
+{
+  "id": "20261128-0215-dialog-1",
+  "kind": "DIALOG",
+  "level": "B1",
+  "createdAt": "2026-11-28T02:15:00+03:00",
+  "title": "A tourist is lost near your office",
+  "instructionsRu": "Ты идёшь на работу, и тебя останавливает турист. Объясни ему дорогу до вокзала и помоги с советами. Отвечай на каждую реплику.",
+  "material": "You are near your office in the city centre. A tourist with a big suitcase stops you.",
+  "items": [
+    {"text": "Excuse me, sorry to bother you! Could you tell me how to get to the central railway station?", "minWords": 6},
+    {"text": "Is it far? I've got this heavy suitcase, so I'm not sure I can walk there.", "minWords": 6},
+    {"text": "And what if I miss my train? It leaves at ten past nine.", "minWords": 6},
+    {"text": "Do you know a good place near the station where I can have breakfast?", "minWords": 6},
+    {"text": "Thank you so much! By the way, have you ever been to my country, Portugal?", "minWords": 6}
+  ],
+  "words": [
+    {"word": "straight", "forms": ["straight on", "straight ahead"]},
+    {"word": "crossroads", "forms": ["crossroad"]},
+    {"word": "recommend", "forms": ["recommends", "recommended", "recommending"]},
+    {"word": "on foot", "forms": []}
+  ],
+  "needWords": 4,
+  "grammar": [
+    {"id": "b1_first_conditional", "pattern": "\\bif\\b[^.?!]*\\b(will|'ll|won't|can|should)\\b|\\b(will|'ll|won't)\\b[^.?!]*\\bif\\b", "hintRu": "условное 1-го типа", "examples": ["if you miss it, you can take the next one", "you'll see it if you turn left"]},
+    {"id": "b1_present_perfect_for_since", "pattern": "\\b(have|has|haven't|hasn't|i've|you've|we've|they've|he's|she's)\\s+(\\w+\\s+)?(been|lived|worked|known|had|seen|visited|gone|done)\\b", "hintRu": "Present Perfect", "examples": ["i have never been to portugal", "i've lived here for five years"]},
+    {"id": "b1_modals_obligation", "pattern": "\\b(should|shouldn't|have to|has to|must|mustn't|don't have to)\\b", "hintRu": "should / have to / must", "examples": ["you should take a taxi", "you don't have to hurry"]}
+  ],
+  "needGrammar": 2,
+  "minMinutes": 5
+}

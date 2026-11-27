@@ -1,0 +1,11 @@
+{
+  "level": "B1",
+  "updatedAt": "2026-11-28T02:15:00+03:00",
+  "summary": "Уверенно пишет в Past Simple, хорошо подбирает слова по теме. Точки роста: артикли, окончание -s в 3-м лице, Present Perfect с for/since.",
+  "grammar": {"a2_past_simple": {"ok": 4, "errors": 1, "lastDay": "2026-11-27"}, "b1_present_perfect_for_since": {"ok": 1, "errors": 2, "lastDay": "2026-11-27"}},
+  "words": {"decide": {"used": 2, "missed": 0}, "exhausting": {"used": 0, "missed": 1}},
+  "strengths": ["связный рассказ о прошлом"],
+  "weaknesses": ["артикли перед исчисляемыми", "окончание -s в 3-м лице"],
+  "nextFocus": ["b1_present_perfect_for_since", "b1_first_conditional"],
+  "history": [{"day": "2026-11-27", "kind": "RETELL", "title": "A day in Prague", "passed": true, "note": "суть передана, 2 ошибки в артиклях"}]
+}

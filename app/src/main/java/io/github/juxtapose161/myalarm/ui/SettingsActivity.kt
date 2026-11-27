@@ -47,7 +47,7 @@ import io.github.juxtapose161.myalarm.SettingsStore
 import io.github.juxtapose161.myalarm.anki.AnkiRepository
 import io.github.juxtapose161.myalarm.quiz.TaskType
 import io.github.juxtapose161.myalarm.course.CourseStore
-import io.github.juxtapose161.myalarm.course.Preparer
+import io.github.juxtapose161.myalarm.data.Sync
 import io.github.juxtapose161.myalarm.course.TaskKind
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
@@ -62,7 +62,7 @@ class SettingsActivity : ComponentActivity() {
         val store = SettingsStore(this)
         val repo = AnkiRepository(this)
         val course = CourseStore(this)
-        Preparer.schedule(this)
+        Sync.schedule(this)
         val test: (Intent.() -> Unit) -> Unit = { extras ->
             startActivity(Intent(this, CaptchaActivity::class.java).putExtra(CaptchaActivity.EXTRA_TEST_DIFFICULTY, 3).apply(extras))
         }
@@ -76,7 +76,7 @@ class SettingsActivity : ComponentActivity() {
                         }
                     }
                     when (tab) {
-                        1 -> ClaudeTab(course)
+                        1 -> SyncTab(course)
                         2 -> ScenariosTab(course) { id -> test { putExtra(CaptchaActivity.EXTRA_TEST_SCENARIO, id) } }
                         3 -> TasksTab(course) { kind -> test { putExtra(CaptchaActivity.EXTRA_TEST_KIND, kind.name) } }
                         4 -> ProgressTab(course, store)

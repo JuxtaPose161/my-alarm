@@ -35,7 +35,7 @@ data class Scenario(
             Scenario(
                 id = "morning", name = "Утренний будильник", from = 4 * 60, to = 11 * 60,
                 warmupCards = 3,
-                kinds = listOf(TaskKind.TRANSLATE, TaskKind.DIALOG, TaskKind.RETELL, TaskKind.DAY_PLAN, TaskKind.ALIAS)
+                kinds = listOf(TaskKind.TRANSLATE, TaskKind.DIALOG, TaskKind.RETELL, TaskKind.DAY_PLAN)
                     .map { it.name },
                 escapeMinutes = 15,
             ),
@@ -43,7 +43,7 @@ data class Scenario(
                 id = "day", name = "Задание по расписанию", from = 11 * 60, to = 4 * 60,
                 warmupCards = 0,
                 kinds = listOf(
-                    TaskKind.NEGOTIATION, TaskKind.REPHRASE, TaskKind.ERRORS, TaskKind.BACK_TRANSLATE,
+                    TaskKind.REPHRASE, TaskKind.ERRORS, TaskKind.BACK_TRANSLATE,
                     TaskKind.CUE_CARD, TaskKind.YESTERDAY, TaskKind.DICTATION, TaskKind.RETELL, TaskKind.DIALOG,
                 ).map { it.name },
                 escapeMinutes = 30,
@@ -55,18 +55,18 @@ data class Scenario(
 
         /**
          * Chooses the next kind: the one done least recently, ties broken at random.
-         * Kinds that need Claude are skipped when it is not available.
+         * Kinds that cannot run now ([available] is false: no prepared task, no Anki words) are skipped.
          */
         fun chooseKind(
             kinds: List<TaskKind>,
-            history: List<LearnerProfile.HistoryEntry>,
-            claudeAvailable: Boolean,
-            ankiAvailable: Boolean,
+            history: List<String>,
+            available: (TaskKind) -> Boolean,
+            fallback: TaskKind,
             random: Random = Random.Default,
         ): TaskKind {
-            val usable = kinds.filter { (claudeAvailable || !it.needsClaude) && (ankiAvailable || !it.needsAnki) }
-            if (usable.isEmpty()) return if (ankiAvailable) TaskKind.TRANSLATE else TaskKind.QUICK
-            fun lastUse(k: TaskKind) = history.indexOfLast { it.kind == k.name }
+            val usable = kinds.filter(available)
+            if (usable.isEmpty()) return fallback
+            fun lastUse(k: TaskKind) = history.lastIndexOf(k.name)
             val oldest = usable.minOf { lastUse(it) }
             val candidates = usable.filter { lastUse(it) == oldest }
             return candidates[random.nextInt(candidates.size)]
@@ -75,6 +75,3 @@ data class Scenario(
         fun format(minute: Int): String = "%02d:%02d".format(minute / 60, minute % 60)
     }
 }
-
-/** Translate and Alias are built from Anki words only. */
-val TaskKind.needsAnki get() = this == TaskKind.TRANSLATE || this == TaskKind.ALIAS

@@ -72,8 +72,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("androidx.work:work-runtime-ktx:2.10.0")
-    // Claude API (official Java SDK, used from Kotlin).
-    implementation("com.anthropic:anthropic-java:3.3.0")
 
     testImplementation("junit:junit:4.13.2")
 }

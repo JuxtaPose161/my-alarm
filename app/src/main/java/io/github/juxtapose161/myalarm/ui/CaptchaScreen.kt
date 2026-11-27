@@ -100,9 +100,7 @@ fun CaptchaScreen(
                 when (val step = ui.step) {
                     is Step.Quick -> QuizSteps(step.session, host) { host.complete(quickResult(step.session)) }
                     is Step.Translate -> TranslateStep(step.session, host)
-                    is Step.Written -> WrittenStep(step, host)
-                    is Step.Chat -> ChatStep(step, host)
-                    is Step.Alias -> AliasStep(step, host)
+                    is Step.Prepared -> PreparedStep(step, host)
                     is Step.Dictate -> DictationStep(step, host)
                 }
             }

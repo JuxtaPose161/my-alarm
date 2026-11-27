@@ -1,0 +1,15 @@
+{
+  "id": "20261128-0215-rephrase-1",
+  "kind": "REPHRASE",
+  "level": "B1",
+  "createdAt": "2026-11-28T02:15:00+03:00",
+  "title": "The new manager and the old printer",
+  "instructionsRu": "Перепиши фразу тремя способами, сохранив смысл. В каждом варианте используй указанную конструкцию.",
+  "material": "The new manager repaired the old printer yesterday, so we can finally print our reports.",
+  "speakMaterial": true,
+  "items": [
+    {"text": "Страдательный залог (the printer…)", "grammar": {"id": "b1_passive_present_past", "pattern": "\\b(was|were|has been|had been)\\s+(\\w+ed|fixed|repaired|mended)\\b", "hintRu": "пассив", "examples": ["the old printer was repaired yesterday", "the printer has been fixed by the new manager"]}, "points": [{"nameRu": "принтер", "anyOf": ["printer", "printers"]}], "needPoints": 1},
+    {"text": "Условное 2-го типа (если бы менеджер не починил…)", "grammar": {"id": "b1_second_conditional", "pattern": "\\bif\\b[^.?!]*\\b(didn't|did not|wasn't|weren't|\\w+ed)\\b[^.?!]*\\b(would|wouldn't|'d|could|couldn't)\\b|\\b(would|wouldn't|couldn't)\\b[^.?!]*\\bif\\b", "hintRu": "условное 2-го типа", "examples": ["if the manager didn't repair the printer, we couldn't print", "we wouldn't print our reports if he hadn't fixed it"]}, "points": [{"nameRu": "печатать отчёты", "anyOf": ["print", "printing", "reports", "report"]}], "needPoints": 1},
+    {"text": "Косвенная речь (A colleague said that…)", "grammar": {"id": "b1_reported_speech", "pattern": "\\b(said|told \\w+|explained|mentioned)\\s+(that\\s+)?[^.?!]*\\b(had|could|would|was|were)\\b", "hintRu": "косвенная речь", "examples": ["a colleague said that the new manager had repaired the printer", "she told me we could finally print"]}, "points": [{"nameRu": "менеджер", "anyOf": ["manager", "boss"]}], "needPoints": 1}
+  ]
+}
