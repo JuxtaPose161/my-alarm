@@ -52,6 +52,30 @@ object TextUtil {
             .filter { it.isNotEmpty() }
             .distinct()
 
+    /**
+     * Accepted Russian answers for a field like "бежать, бегать (быстро); мчаться" ->
+     * ["бежать", "бегать", "мчаться"]. Text in parentheses is a comment, not part of the answer.
+     */
+    fun russianVariants(field: String): List<String> {
+        val cleaned = clean(field)
+        val withoutNotes = cleaned.replace(Regex("""\([^)]*\)|\[[^]]*]"""), " ")
+        val parts = withoutNotes.split(',', ';', '/', '|').map { normalize(it) }.filter { it.isNotEmpty() }
+        // "(с)делать" style: also accept the variant with the bracketed letters kept.
+        val keepBrackets = cleaned.replace("(", "").replace(")", "")
+            .split(',', ';', '/', '|').map { normalize(it) }.filter { it.isNotEmpty() }
+        return (parts + keepBrackets).distinct()
+    }
+
+    /** Russian answer check: exact after normalisation, one typo forgiven in words of 6+ letters. */
+    fun isRussianAnswerCorrect(input: String, variants: List<String>): Boolean {
+        val n = normalize(input)
+        if (n.isEmpty()) return false
+        return variants.any { v -> n == v || (v.length >= 6 && levenshtein(n, v) <= 1) }
+    }
+
+    /** "the apple" -> "apple": dictation often adds an article. */
+    fun stripArticle(s: String): String = s.trim().replace(Regex("""(?i)^(a|an|the)\s+"""), "")
+
     /** The main form shown in hints and choices: first variant of the field. */
     fun primary(field: String): String = answerVariants(field).firstOrNull() ?: normalize(clean(field))
 

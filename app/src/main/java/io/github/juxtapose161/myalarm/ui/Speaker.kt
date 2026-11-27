@@ -31,9 +31,14 @@ class Speaker(context: Context, private val onReady: (Boolean) -> Unit) : TextTo
         onReady(ready)
     }
 
-    fun speak(text: String) {
+    fun speak(text: String, rate: Float = 0.85f) {
         if (!ready) { pending = text; return }
+        tts.setSpeechRate(rate)
         tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "word")
+    }
+
+    fun stop() {
+        if (ready) tts.stop()
     }
 
     fun shutdown() {

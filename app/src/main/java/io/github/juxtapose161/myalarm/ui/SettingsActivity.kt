@@ -46,6 +46,12 @@ import io.github.juxtapose161.myalarm.Settings
 import io.github.juxtapose161.myalarm.SettingsStore
 import io.github.juxtapose161.myalarm.anki.AnkiRepository
 import io.github.juxtapose161.myalarm.quiz.TaskType
+import io.github.juxtapose161.myalarm.course.CourseStore
+import io.github.juxtapose161.myalarm.course.Preparer
+import io.github.juxtapose161.myalarm.course.TaskKind
+import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.Tab
+import androidx.compose.runtime.saveable.rememberSaveable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -55,32 +61,53 @@ class SettingsActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val store = SettingsStore(this)
         val repo = AnkiRepository(this)
+        val course = CourseStore(this)
+        Preparer.schedule(this)
+        val test: (Intent.() -> Unit) -> Unit = { extras ->
+            startActivity(Intent(this, CaptchaActivity::class.java).putExtra(CaptchaActivity.EXTRA_TEST_DIFFICULTY, 3).apply(extras))
+        }
         setContent {
             AppTheme {
-                SettingsScreen(
-                    store = store,
-                    repo = repo,
-                    onTest = { difficulty ->
-                        startActivity(
-                            Intent(this, CaptchaActivity::class.java)
-                                .putExtra(CaptchaActivity.EXTRA_TEST_DIFFICULTY, difficulty)
-                        )
-                    },
-                    openStore = {
-                        val uri = Uri.parse("market://details?id=${AnkiRepository.PACKAGE}")
-                        try { startActivity(Intent(Intent.ACTION_VIEW, uri)) } catch (_: ActivityNotFoundException) {
-                            startActivity(Intent(Intent.ACTION_VIEW,
-                                Uri.parse("https://play.google.com/store/apps/details?id=${AnkiRepository.PACKAGE}")))
+                var tab by rememberSaveable { mutableIntStateOf(0) }
+                Column(Modifier.fillMaxSize()) {
+                    ScrollableTabRow(selectedTabIndex = tab, edgePadding = 8.dp) {
+                        listOf("Anki", "Claude", "Сценарии", "Задания", "Прогресс").forEachIndexed { i, t ->
+                            Tab(selected = tab == i, onClick = { tab = i }, text = { Text(t) })
                         }
-                    },
-                )
+                    }
+                    when (tab) {
+                        1 -> ClaudeTab(course)
+                        2 -> ScenariosTab(course) { id -> test { putExtra(CaptchaActivity.EXTRA_TEST_SCENARIO, id) } }
+                        3 -> TasksTab(course) { kind -> test { putExtra(CaptchaActivity.EXTRA_TEST_KIND, kind.name) } }
+                        4 -> ProgressTab(course, store)
+                        else -> AnkiTab(
+                            store = store,
+                            repo = repo,
+                            onTest = { difficulty ->
+                                startActivity(
+                                    Intent(this@SettingsActivity, CaptchaActivity::class.java)
+                                        .putExtra(CaptchaActivity.EXTRA_TEST_DIFFICULTY, difficulty)
+                                        .putExtra(CaptchaActivity.EXTRA_TEST_KIND, TaskKind.QUICK.name)
+                                )
+                            },
+                            openStore = ::openAnkiInStore,
+                        )
+                    }
+                }
             }
+        }
+    }
+
+    private fun openAnkiInStore() {
+        val uri = Uri.parse("market://details?id=${AnkiRepository.PACKAGE}")
+        try { startActivity(Intent(Intent.ACTION_VIEW, uri)) } catch (_: ActivityNotFoundException) {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=${AnkiRepository.PACKAGE}")))
         }
     }
 }
 
 @Composable
-private fun SettingsScreen(
+private fun AnkiTab(
     store: SettingsStore,
     repo: AnkiRepository,
     onTest: (Int) -> Unit,
@@ -116,7 +143,8 @@ private fun SettingsScreen(
         Text("Английский будильник", style = MaterialTheme.typography.headlineSmall)
         Text(
             "В Sleep as Android: Настройки → Будильник → CAPTCHA → выбери «Английский из Anki» и сложность. " +
-                "Сложность 1–5 задаёт число заданий (3, 4, 5, 7, 10) и трудность примеров.",
+                "Какие задания будут, решает сценарий по времени (вкладка «Сценарии»). " +
+                "Сложность 1–5 задаёт число быстрых карточек (3, 4, 5, 7, 10) и трудность примеров.",
             color = Color.Gray,
         )
 
@@ -193,7 +221,7 @@ private fun SettingsScreen(
         }
 
         // --- Task types ---
-        Section("Задания")
+        Section("Быстрые карточки")
         TaskType.entries.forEach { type ->
             val checked = type in settings.types
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -221,7 +249,7 @@ private fun SettingsScreen(
         }
 
         HorizontalDivider()
-        Section("Пробный запуск")
+        Section("Пробный запуск быстрых карточек")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             (1..5).forEach { d ->
                 if (d == testDifficulty) Button(onClick = {}) { Text("$d") }
@@ -233,24 +261,16 @@ private fun SettingsScreen(
         }
         Text("Пробный запуск не сохраняет ошибки и не трогает Anki.", color = Color.Gray)
 
-        val history = remember { store.history().takeLast(7).reversed() }
-        if (history.isNotEmpty()) {
-            Section("Последние утра")
-            history.forEach { line ->
-                val p = line.split('|')
-                if (p.size == 3) Text("${p[0]}: верно ${p[1]}, ошибок ${p[2]}")
-            }
-        }
     }
 }
 
 @Composable
-private fun Section(title: String) {
+internal fun Section(title: String) {
     Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 6.dp))
 }
 
 @Composable
-private fun <T> Picker(label: String, options: List<T>, display: (T) -> String, onPick: (T) -> Unit) {
+internal fun <T> Picker(label: String, options: List<T>, display: (T) -> String, onPick: (T) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth()) { Text(label) }

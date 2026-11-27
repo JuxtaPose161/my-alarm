@@ -2,7 +2,7 @@ name: Build APK
 
 on:
   push:
-    branches: [main]
+    branches: ['**']
   workflow_dispatch:
 
 permissions:
@@ -53,7 +53,9 @@ jobs:
           name: my-alarm-apk
           path: my-alarm.apk
 
+      # Releases come only from main; other branches get the APK as a run artifact.
       - name: Publish release
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v0.1.${{ github.run_number }}

@@ -51,8 +51,9 @@ import io.github.juxtapose161.myalarm.quiz.TaskType
 import io.github.juxtapose161.myalarm.quiz.TextUtil
 import kotlinx.coroutines.delay
 
-private val Good = Color(0xFF2E7D32)
-private val Bad = Color(0xFFC62828)
+internal val Good = Color(0xFF2E7D32)
+internal val Bad = Color(0xFFC62828)
+internal val Warn = Color(0xFFFFB74D)
 
 @Composable
 fun AppTheme(content: @Composable () -> Unit) {
@@ -65,28 +66,65 @@ fun AppTheme(content: @Composable () -> Unit) {
 fun CaptchaScreen(
     ui: CaptchaUi,
     remainingSeconds: Int?,
-    speak: (String) -> Unit,
-    onSolved: () -> Unit,
+    escapeVisible: Boolean,
+    host: TaskHost,
+    onEscape: () -> Unit,
 ) {
     when (ui) {
-        CaptchaUi.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
+        is CaptchaUi.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                CircularProgressIndicator()
+                Text(ui.message, color = Color.Gray)
+            }
         }
-        is CaptchaUi.Quiz -> QuizScreen(ui, remainingSeconds, speak, onSolved)
+        is CaptchaUi.Run -> Column(
+            Modifier
+                .fillMaxSize()
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (ui.total > 1) "${ui.step.title} · ${ui.index + 1}/${ui.total}" else ui.step.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                if (ui.preview) Text("проба · ", color = Color.Gray)
+                remainingSeconds?.let { Text("⏱ $it с", color = if (it <= 10) Bad else Color.Gray) }
+            }
+            ui.notice?.let { Text(it, color = Warn) }
+            // key() resets all per-task UI state when the step changes.
+            key(ui.generation) {
+                when (val step = ui.step) {
+                    is Step.Quick -> QuizSteps(step.session, host) { host.complete(quickResult(step.session)) }
+                    is Step.Translate -> TranslateStep(step.session, host)
+                    is Step.Written -> WrittenStep(step, host)
+                    is Step.Chat -> ChatStep(step, host)
+                    is Step.Alias -> AliasStep(step, host)
+                    is Step.Dictate -> DictationStep(step, host)
+                }
+            }
+            if (escapeVisible) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = onEscape, modifier = Modifier.fillMaxWidth()) {
+                    Text("Не успеваю — решить примеры вместо заданий")
+                }
+            }
+        }
     }
 }
 
+private fun quickResult(s: QuizSession) = StepResult(true, missedNotes = s.missed.toSet(), correctNotes = s.correct.toSet())
+
+/** The quick cards: counter, progress and one card at a time. */
 @Composable
-private fun QuizScreen(
-    ui: CaptchaUi.Quiz,
-    remainingSeconds: Int?,
-    speak: (String) -> Unit,
-    onSolved: () -> Unit,
-) {
-    val session = ui.session
+private fun QuizSteps(session: QuizSession, host: TaskHost, onSolved: () -> Unit) {
     var step by remember { mutableIntStateOf(0) }
     var answers by remember { mutableIntStateOf(0) } // bumps the header after each answer
     val refresh: () -> Unit = { answers++ }
+    val speak: (String) -> Unit = { host.speak(it) }
     val next: () -> Unit = {
         if (session.isFinished) onSolved() else {
             session.advance()
@@ -94,39 +132,16 @@ private fun QuizScreen(
         }
     }
 
-    Column(
-        Modifier
-            .fillMaxSize()
-            .imePadding()
-            .verticalScroll(rememberScrollState())
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            // Reading `answers` subscribes the header to answer events.
-            val counter = answers.let { "✓ ${session.done} / ${session.required}" }
-            Text(
-                counter,
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.weight(1f),
-            )
-            if (ui.preview) Text("пробный запуск · ", color = Color.Gray)
-            remainingSeconds?.let { Text("⏱ $it с", color = if (it <= 10) Bad else Color.Gray) }
-        }
-        val progress = answers.let { (session.done.toFloat() / session.required).coerceIn(0f, 1f) }
-        LinearProgressIndicator(
-            progress = { progress },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        ui.notice?.let { Text(it, color = Color(0xFFFFB74D)) }
+    val counter = answers.let { "✓ ${session.done} / ${session.required}" }
+    Text(counter, color = Color.Gray)
+    val progress = answers.let { (session.done.toFloat() / session.required).coerceIn(0f, 1f) }
+    LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
 
-        // key(step) resets all per-task UI state when the task changes.
-        key(step) {
-            when (val task = session.current) {
-                is QuizTask.Choice -> ChoiceTask(task, session, speak, refresh, next)
-                is QuizTask.Typing -> TypingTask(task, session, refresh, next)
-                is QuizTask.Math -> MathTask(task, session, refresh, next)
-            }
+    key(step) {
+        when (val task = session.current) {
+            is QuizTask.Choice -> ChoiceTask(task, session, speak, refresh, next)
+            is QuizTask.Typing -> TypingTask(task, session, refresh, next)
+            is QuizTask.Math -> MathTask(task, session, refresh, next)
         }
     }
 }
